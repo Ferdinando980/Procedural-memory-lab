@@ -177,6 +177,20 @@ _KNOWN_BENCHMARK_DEFECTS = {
         "so this has passed as correct in every run that includes it. See "
         "experiment/canary.py for the investigation."
     ),
+    "variable_shadowing__reverse_words__novel_b": (
+        "Labeled variable_shadowing, but the real defect against test_source "
+        "is an unrelated `.upper()` call inside the inner (shadowing) loop's "
+        "body, not the shadowing itself -- verified 2026-09-21 by direct "
+        "manipulation: a candidate that renames the shadowed variable but "
+        "keeps `.upper()` still FAILS both tests (case mismatch); a candidate "
+        "that removes `.upper()` but leaves the shadowing pattern untouched "
+        "PASSES all tests. A run/search that (correctly) identifies and fixes "
+        "'variable shadowing' on this task will not pass it, and a systematic "
+        "recovery failure here reflects this task-authoring confound, not "
+        "necessarily a real capability gap on shadowing. Found investigating a "
+        "7/7 deterministic failure in verification/benchmark_self_consistency.py's "
+        "k=3/5/7 sweep (TODO.md point 17)."
+    ),
 }
 
 

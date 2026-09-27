@@ -79,19 +79,27 @@ _CLASSIFY_RELATIONSHIP_SYSTEM_PROMPT = (
     "You are given ONE task (its buggy source and test suite) and TWO "
     "debugging procedures ('skills') both retrieved as potentially relevant "
     "to it. First, index the distinct cases/situations this task's test "
-    "suite actually exercises -- a single function can legitimately need "
+    "suite actually exercises. A case must correspond to a distinct tested "
+    "input, branch, or sequential operation; NEVER split two competing "
+    "interpretations of the same assertion into separate cases. A single function can legitimately need "
     "different actions for different cases. For EACH skill, quote its "
     "concrete instruction VERBATIM from that skill's own text, and state "
-    "which case(s) above it applies to. Then classify the relationship "
+    "which case(s) above it targets. 'Applies' means the instruction addresses "
+    "that operation, even if following it would be WRONG for the expected "
+    "result; do not use correctness to erase applicability. Then classify the relationship "
     "between the two skills for THIS specific task as exactly one of:\n"
-    "- INDEPENDENT: they concern unrelated aspects, no real interaction.\n"
+    "- INDEPENDENT: at least one skill does not apply to any tested case in "
+    "this task. Merely addressing different aspects is NOT independent when "
+    "both fixes are actually needed by this same task.\n"
     "- COMPOUND: they apply to DIFFERENT cases/steps of the SAME task -- "
     "both are correct, meant to be applied in sequence or one per case. "
     "This includes a skill and something that reads like its negation, when "
     "the task genuinely has two different situations, one needing each.\n"
     "- REAL_CONFLICT: they apply to the EXACT SAME case/situation and give "
     "mutually exclusive instructions for it -- only one can be correct "
-    "there.\n"
+    "there. If the test suite has one boundary assertion and the skills "
+    "recommend inclusive versus strict comparison for that assertion, this "
+    "is one case and a REAL_CONFLICT, not two cases.\n"
     "- INCONCLUSIVE: cannot determine this from the given text.\n\n"
     "Return ONLY a single JSON object, no prose, no markdown fences: "
     '{"cases": ["case description", ...], "skill_a_quote": "verbatim quote '
@@ -114,6 +122,22 @@ _RECONCILE_SYSTEM_PROMPT = (
     "instruction). If you honestly cannot find one, say so.\n\n"
     'Return ONLY JSON: {"reconciling_reading": "description of the two '
     'cases" or null}'
+)
+
+_REVIEW_NONINTERACTION_SYSTEM_PROMPT = (
+    "Review a prior INDEPENDENT/INCONCLUSIVE classification by decomposing it. "
+    "For the concrete task, decide separately whether skill A's quoted "
+    "instruction applies to any tested operation and whether skill B's quoted "
+    "instruction applies. Applying means targeting that operation, even if "
+    "the instruction would produce the wrong result. If either does not apply, the relationship is "
+    "INDEPENDENT. If both apply to different operations or sequential fixes, "
+    "it is COMPOUND. If both apply to the same operation/input and prescribe "
+    "mutually exclusive actions, it is REAL_CONFLICT. Do not call two needed "
+    "fixes independent merely because they address different bug types. Do not "
+    "invent two cases from competing interpretations of one assertion.\n\n"
+    'Return ONLY JSON: {"a_applies": true|false, "b_applies": true|false, '
+    '"same_operation": true|false, "relationship": '
+    '"INDEPENDENT|COMPOUND|REAL_CONFLICT", "reasoning": "one sentence"}'
 )
 
 
@@ -186,6 +210,32 @@ def _survives_reconciliation_check(book_a: Book, book_b: Book, task: Task, class
     return False
 
 
+def _review_noninteraction(book_a: Book, book_b: Book, task: Task, classification: dict, adapter: ModelAdapter) -> dict:
+    prompt = (
+        f"{_task_context(task)}\n\n"
+        f"Skill A instruction: {classification['quote_a']!r}\n"
+        f"Skill B instruction: {classification['quote_b']!r}\n\n"
+        f"Prior classification: {classification['relationship']} -- {classification['reasoning']}"
+    )
+    completion = adapter.complete(prompt=prompt, system=_REVIEW_NONINTERACTION_SYSTEM_PROMPT, max_tokens=512, thinking_budget=0)
+    match = _JSON_RE.search(completion.text)
+    if not match:
+        return classification
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return classification
+    relationship = data.get("relationship")
+    if relationship not in {"INDEPENDENT", "COMPOUND", "REAL_CONFLICT"}:
+        return classification
+    # The first pass already extracted non-empty applicability for both
+    # skills. A second pass may reassess whether one fix is correct, but it
+    # cannot consistently turn "both target this task" into INDEPENDENT.
+    if relationship == "INDEPENDENT" and classification["applies_to_a"] and classification["applies_to_b"]:
+        relationship = "COMPOUND"
+    return {**classification, "relationship": relationship, "reasoning": str(data.get("reasoning") or classification["reasoning"])}
+
+
 def check_conflict(book_a: Book, book_b: Book, task: Task, adapter: ModelAdapter, n_samples: int = 3) -> ConflictReport | None:
     """None means INCONCLUSIVE/unparseable on the majority of samples --
     fail closed, same as every other identify_* in this package: a caller
@@ -195,6 +245,8 @@ def check_conflict(book_a: Book, book_b: Book, task: Task, adapter: ModelAdapter
         result = _classify_once(book_a, book_b, task, adapter)
         if result is None:
             return None
+        if result["relationship"] in ("INDEPENDENT", "INCONCLUSIVE"):
+            result = _review_noninteraction(book_a, book_b, task, result, adapter)
         if result["relationship"] == "REAL_CONFLICT":
             if not _survives_reconciliation_check(book_a, book_b, task, result, adapter):
                 result = {**result, "relationship": "COMPOUND", "reconciled": True}

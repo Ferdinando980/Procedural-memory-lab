@@ -53,10 +53,24 @@ class GemmaAdapter(ModelAdapter):
         # level (config.py), so there is nothing to toggle per-call. Accepted
         # and ignored, same as every other adapter without a real knob (see
         # adapters/base.py's docstring).
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+        #
+        # No separate 'system' role message (2026-09-21, found via skill_
+        # evaluation_lab's independent-judge pass): Gemma's actual chat
+        # format has no system turn -- gemma-chat-template.jinja renders one
+        # as the literal, out-of-distribution '<start_of_turn>system\n...'
+        # (a turn label the model was never trained on), and 2 of 15
+        # evaluate_suite pairs in skill_evaluation_calibration_2026_09_20
+        # showed the model echoing that exact rendered block back verbatim
+        # at the end of its own completion -- a real leak, not a template
+        # bug (the template renders every role literally, as designed; the
+        # bug was asking it to render a role Gemma doesn't support). Fixed
+        # at the one real call site instead of the shared .jinja template
+        # (also used by Ai/AI-Launcher/01-Gemma4-Vision.bat and any other
+        # future llama-server client) -- folding system into the user turn
+        # is the standard, community-documented workaround for models
+        # without a native system role, and keeps every other consumer of
+        # the template, and its simple for-loop logic, untouched.
+        messages = [{"role": "user", "content": f"{system.strip()}\n\n{prompt}" if system else prompt}]
 
         start = time.monotonic()
         try:

@@ -47,6 +47,8 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "")
 # llama-server) before using this provider, this module does not launch it.
 GEMMA_BASE_URL = os.getenv("GEMMA_BASE_URL", "http://127.0.0.1:8080/v1")
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-12B-Q4_K_M.gguf")
+QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "http://127.0.0.1:8081/v1")
+QWEN_MODEL = os.getenv("QWEN_MODEL", "Qwen3.6-35B-A3B-Q4_K_M.gguf")
 
 # gemini_vertex auth: project + region, both required; the service account key
 # itself is never read here -- GOOGLE_APPLICATION_CREDENTIALS (set in .env like
@@ -79,6 +81,9 @@ COMPRESSION_FAILURES_DIR = Path(__file__).resolve().parent / "library" / "compre
 # load_books() never reads this directory -- routing/_latest_per_pattern is
 # unaffected, only historical id->pattern_id lookups consult it.
 ARCHIVED_BOOKS_DIR = Path(__file__).resolve().parent / "library" / "archived_books"
+# Quarantine for hypotheses learned from failures. Candidate Books are loaded
+# only by explicit validation tools and can never enter normal Librarian routing.
+CANDIDATE_BOOKS_DIR = Path(__file__).resolve().parent / "library" / "candidate_books"
 # Anchored to this file's own folder (not ROOT_DIR/Ricerca) so the logs --
 # the real evidence behind every empirical claim in README.md -- live inside
 # the cognitive_rpg git repo and travel with it (moved here from Ricerca/logs/

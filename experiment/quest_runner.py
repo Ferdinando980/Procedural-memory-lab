@@ -1,11 +1,12 @@
-from ..adapters.base import ModelAdapter
+from ..adapters.base import CompletionResult, ModelAdapter
 from ..agents.worker import MAX_OUTPUT_TOKENS, SYSTEM_PROMPT, build_prompt, extract_code
 from ..cheater import solution_bank
 from ..domain.verifier import run_tests
 from ..librarian import librarian
+from ..librarian.competence import probe_capability, should_retrieve
 from ..librarian.context_budget import enforce_budget
 from ..models import SkillPackage, Task
-from ..verification import detective
+from ..verification.failure_recovery import recover_failed_attempt
 from .events import emit
 from .experiment_log import LogRecord, append, new_record
 
@@ -18,16 +19,28 @@ def run_quest(
     use_librarian: bool = False,
     use_cheater: bool = False,
     use_detective: bool = False,
+    use_retrieval_gate: bool = False,
 ) -> LogRecord:
-    """use_detective (2026-09-18, opt-in, default False -- does not change
-    A/B/F/C behavior at all): after Librarian retrieval, if the retrieved
-    book has a multi-case rule, runs detective.investigate_cached (Expert-
-    driven, on-disk cached per (book, task) so repeated validation runs
-    don't re-invoke the Expert for the same pair) and, if it resolves,
-    appends the hypothesis as an explicit hint in the Worker's prompt --
-    same annotation role as skill_conflict.py's COMPOUND note. Deliberately
-    a NEW opt-in config (e.g. "FD"), never mutates what F itself means, so
-    F's own historical numbers stay comparable."""
+    """Run one quest; optionally recover a verified failure with Detective.
+
+    ``use_detective`` never changes the first F attempt.  Only a failed
+    executable verification triggers investigation and one feedback-grounded
+    retry.  Thus a 5/5 F run makes zero Detective calls, while a 4/5 run gives
+    the single failed case one recovery opportunity.
+
+    ``use_retrieval_gate`` (2026-09-21, TODO.md point 20/21 application #1,
+    default False -- no behavior change for any existing caller): only takes
+    effect together with ``use_librarian``. Before routing, runs librarian.
+    competence.probe_capability (2 real, unaided Worker samples on THIS
+    task, verified with real pytest) and skips retrieval entirely when
+    should_retrieve() says the result was a deterministic PASS ("atom" --
+    the Worker already solves this reliably without help, the exact case
+    experiment/metrics.py::retrieval_waste_analysis measured as 81.3%
+    historical waste). The 2 probe calls have a real token cost of their
+    own, tracked as their own event -- this is a genuine trade (probe cost
+    now vs skill-injection cost later), not a free optimization, and must
+    be measured, not assumed.
+    """
     npc = f"{config_name}:npc"
     ev = emit(
         experiment_id, task.task_id, config_name, npc, "QUEST_CREATED",
@@ -48,13 +61,38 @@ def run_quest(
     base_tokens = adapter.count_input_tokens(base_prompt, system=SYSTEM_PROMPT)
 
     skill_package = None
+    gated_skip = False
     if use_librarian or use_cheater:
         source = "librarian" if use_librarian else "cheater"
         ev = emit(
             experiment_id, task.task_id, config_name, f"{config_name}:{source}", "RETRIEVAL_STARTED",
             parent_event_id=ev.event_id, reason="route_skill",
         )
-        skill_package = librarian.route(task) if use_librarian else solution_bank.route(task)
+
+        if use_retrieval_gate and use_librarian:
+            probe_prompt = build_prompt(task, None)
+            probe_tokens_estimate = adapter.count_input_tokens(probe_prompt, system=SYSTEM_PROMPT)
+            is_deterministic, probe_results = probe_capability(task, adapter, reps=2)
+            gated_skip = not should_retrieve(is_deterministic, probe_results)
+            ev = emit(
+                experiment_id, task.task_id, config_name, f"{config_name}:{source}", "RETRIEVAL_GATE_DECISION",
+                parent_event_id=ev.event_id, reason="atom_particle_probe",
+                is_deterministic=is_deterministic, probe_results=probe_results, skipped_retrieval=gated_skip,
+                # Real cost of the 2-sample probe itself -- an honest trade
+                # against the skill-injection tokens it might save, not a
+                # free optimization. Exact per-call token/cost accounting
+                # isn't exposed by probe_capability's return value (it only
+                # returns pass/fail), so this is an estimate of the input
+                # side only (2x the base prompt, since the probe reuses the
+                # same unaided prompt) -- output tokens/cost for the 2 real
+                # calls are real but not separately itemized here.
+                input_tokens=probe_tokens_estimate * 2, output_tokens=0,
+            )
+
+        if gated_skip:
+            skill_package = SkillPackage(books=[], coverage="NONE")
+        else:
+            skill_package = librarian.route(task) if use_librarian else solution_bank.route(task)
 
         model_id = getattr(adapter, "model", None) or getattr(adapter, "model_name", "?")
         skill_package, base_over_budget, dropped_book_ids = enforce_budget(
@@ -81,44 +119,14 @@ def run_quest(
                 dropped_book_ids=dropped_book_ids, model=model_id,
             )
 
-        detective_hint = None
-        if use_detective and skill_package.books:
-            # Small (adapter), NOT Expert -- 2026-09-18, corrected: the whole
-            # point of this project is a Small-model ecosystem approaching
-            # Expert performance WITHOUT calling Expert at runtime. Expert's
-            # actual job already happened when Detective's own prompts were
-            # authored (the generic index-cases/ask-a-distinguishing-
-            # question/answer-with-evidence method IS "how Claude would do
-            # it", already baked into detective.py's system prompts) --
-            # running a live Expert call here would just smuggle Expert back
-            # into F+Detective's runtime, defeating the comparison against F
-            # the same way the Cheater config exists to catch. Verified
-            # live: Gemma alone correctly resolves both real cases here once
-            # the question-generation bug (see detective.py) was fixed.
-            detective_adapter = adapter
-            for book in skill_package.books:
-                hyp = detective.investigate_cached(book, task, detective_adapter)
-                if hyp is not None and hyp.status == "RESOLVED":
-                    detective_hint = (
-                        f"For this specific task, the applicable case of the skill's rule is: {hyp.supported_case!r}."
-                        + (f' Evidence: "{hyp.evidence_quote}".' if hyp.evidence_quote else " (determined by ruling out the other cases).")
-                    )
-                    break  # un solo indizio basta -- generico, non legato a un libro specifico
-
         prompt = build_prompt(task, skill_package)
-        if detective_hint:
-            prompt = prompt.replace(
-                "Return the corrected function.",
-                f"Hint for this specific task (from a separate investigation of which case of the skill's "
-                f"rule applies here): {detective_hint}\n\nReturn the corrected function.",
-            )
         prompt_tokens = adapter.count_input_tokens(prompt, system=SYSTEM_PROMPT)
         ev = emit(
             experiment_id, task.task_id, config_name, f"{config_name}:{source}", "RETRIEVAL_RESULT",
             parent_event_id=ev.event_id, reason="route_skill",
             coverage=skill_package.coverage,
             skill_ids=[book.id for book in skill_package.books],
-            detective_hint_used=detective_hint is not None,
+            detective_hint_used=False,
             base_prompt_tokens=base_tokens,
             skill_context_tokens=max(0, prompt_tokens - base_tokens),
             # Deterministic tag-overlap / solution-lookup retrieval makes no
@@ -164,9 +172,93 @@ def run_quest(
         parent_event_id=ev.event_id, reason="verify_fix",
         passed=verification.passed, tests_total=verification.tests_total,
         tests_passed=verification.tests_passed,
+        failed_candidate_source=candidate_source if not verification.passed else None,
+        verifier_feedback=(verification.stdout or verification.error) if not verification.passed else None,
         # pytest subprocess makes no model call -- real cost here is 0.
         input_tokens=0, output_tokens=0,
     )
+
+    # Recovery is deliberately failure-triggered.  The first attempt above is
+    # byte-for-byte the normal F path, so successful work is never perturbed.
+    recovery_calls: list[CompletionResult] = []
+    if use_detective and not verification.passed:
+        ev = emit(
+            experiment_id, task.task_id, config_name, f"{config_name}:detective", "RECOVERY_STARTED",
+            parent_event_id=ev.event_id, reason="verified_failure",
+            initial_tests_passed=verification.tests_passed, initial_tests_total=verification.tests_total,
+        )
+        outcome = recover_failed_attempt(
+            task, candidate_source, verification, adapter,
+            initial_package=skill_package, use_librarian=use_librarian,
+        )
+        skill_package = outcome.post_failure_package
+        recovery_calls.extend(outcome.detective_calls)
+        ev = emit(
+            experiment_id, task.task_id, config_name, f"{config_name}:librarian", "POST_FAILURE_RETRIEVAL",
+            parent_event_id=ev.event_id, reason="route_verified_failure",
+            failure_status=outcome.failure.status,
+            skill_ids=[book.id for book in skill_package.books], coverage=skill_package.coverage,
+            input_tokens=0, output_tokens=0,
+        )
+        ev = emit(
+            experiment_id, task.task_id, config_name, f"{config_name}:detective", "DETECTIVE_RESULT",
+            parent_event_id=ev.event_id, reason="diagnose_verified_failure",
+            resolved=outcome.detective_hint is not None, hint=outcome.detective_hint,
+            case_resolved=outcome.case_resolved,
+            failure_diagnosed=outcome.failure_diagnosed,
+            model_calls=len(outcome.detective_calls),
+            input_tokens=sum(c.input_tokens for c in outcome.detective_calls),
+            output_tokens=sum(c.output_tokens for c in outcome.detective_calls),
+            cost_usd=sum(c.cost_usd for c in outcome.detective_calls),
+            latency_ms=sum(c.latency_ms for c in outcome.detective_calls),
+        )
+        recovery = outcome.worker_call
+        recovery_calls.append(recovery)
+        recovered_source = outcome.recovered_source
+        ev = emit(
+            experiment_id, task.task_id, config_name, f"{config_name}:worker", "RECOVERY_MODEL_CALL_FINISHED",
+            parent_event_id=ev.event_id, reason="repair_verified_failure",
+            model=recovery.model, provider=recovery.provider,
+            input_tokens=recovery.input_tokens, output_tokens=recovery.output_tokens,
+            cached_input_tokens=recovery.cached_input_tokens,
+            reasoning_output_tokens=recovery.reasoning_output_tokens,
+            cost_usd=recovery.cost_usd, latency_ms=recovery.latency_ms,
+            retries=recovery.retries, paused_seconds=recovery.paused_seconds,
+            detective_hint_used=outcome.detective_hint is not None,
+        )
+        verification = outcome.verification
+        ev = emit(
+            experiment_id, task.task_id, config_name, f"{config_name}:checker", "RECOVERY_VERIFICATION",
+            parent_event_id=ev.event_id, reason="verify_recovery",
+            passed=verification.passed, tests_total=verification.tests_total,
+            tests_passed=verification.tests_passed, input_tokens=0, output_tokens=0,
+            failed_candidate_source=recovered_source if not verification.passed else None,
+            verifier_feedback=(verification.stdout or verification.error) if not verification.passed else None,
+        )
+        ev = emit(
+            experiment_id, task.task_id, config_name, f"{config_name}:inspector", "INSPECTOR_VERDICT",
+            parent_event_id=ev.event_id, reason="audit_recovery_trajectory",
+            status=outcome.inspector_verdict.status,
+            responsible=outcome.inspector_verdict.responsible,
+            verdict_reason=outcome.inspector_verdict.reason,
+            input_tokens=0, output_tokens=0,
+        )
+
+    if recovery_calls:
+        calls = [completion, *recovery_calls]
+        completion = CompletionResult(
+            text=recovery.text,
+            input_tokens=sum(c.input_tokens for c in calls),
+            output_tokens=sum(c.output_tokens for c in calls),
+            cached_input_tokens=sum(c.cached_input_tokens for c in calls),
+            reasoning_output_tokens=(
+                sum(c.reasoning_output_tokens or 0 for c in calls)
+                if any(c.reasoning_output_tokens is not None for c in calls) else None
+            ),
+            cost_usd=sum(c.cost_usd for c in calls), latency_ms=sum(c.latency_ms for c in calls),
+            model=completion.model, provider=completion.provider,
+            retries=sum(c.retries for c in calls), paused_seconds=sum(c.paused_seconds for c in calls),
+        )
 
     record = new_record(
         experiment_id=experiment_id,

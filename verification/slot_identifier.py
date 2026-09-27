@@ -87,6 +87,9 @@ _MATCH_SYSTEM_PROMPT = (
 )
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_NUMERIC_LITERAL_RE = re.compile(
+    r"(?<![\w.])(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?%?)(?![\w.])"
+)
 
 ValueExtractor = Callable[[str], "str | None"]
 
@@ -153,16 +156,17 @@ _EXTRACT_LITERALS_SYSTEM_PROMPT = (
     "example, default, or illustrative case -- a number, a specific quoted "
     "string, or a specific named method/function call. This is a MECHANICAL "
     "LISTING task, not a judgment call about risk: list every literal-looking "
-    "value you find, even ones you are not sure matter.\n\n"
+    "value you find, even ones you are not sure matter. The procedure is "
+    "inside a fenced block only to delimit it; inspect all content inside the "
+    "fence. Bare numbers in examples MUST be listed.\n\n"
     "Do NOT list a formula, expression, or code template that contains a "
-    "variable name (e.g. `abs(a - b) < epsilon` is a reusable template, not a "
-    "literal -- `epsilon` is a placeholder, nothing to extract there; but the "
-    "number 1e-9 inside `epsilon = 1e-9` IS a literal, extract that). Only "
+    "variable name: a reusable comparison template containing placeholders is "
+    "not itself a literal, but a concrete number assigned to a placeholder IS. Only "
     "list something a reader could copy-paste as-is into unrelated code -- a "
     "bare number, a bare quoted string, or a bare method name with no "
     "variable in it.\n\n"
     "Return ONLY a JSON array of exact substrings, copied verbatim "
-    'character-for-character from the text, e.g. ["1e-9", "casefold()"]. '
+    "character-for-character from the text. "
     "Empty array [] if none. (This is a mechanical listing task -- no "
     "reasoning field needed, just the list.)"
 )
@@ -220,7 +224,15 @@ def identify_slot_decomposed(text: str, source_label: str, adapter: ModelAdapter
         return None
     # Verbatim, come identify_slot: uno slot candidato allucinato (non
     # presente per davvero nel testo) non e' recuperabile, va scartato.
-    candidates = [c for c in candidates if isinstance(c, str) and c.strip() and c in text][:max_candidates]
+    candidates = [c for c in candidates if isinstance(c, str) and c.strip() and c in text]
+    if not candidates:
+        # This first stage is deliberately mechanical. Gemma has returned []
+        # for text visibly containing numeric literals, and has also copied
+        # literals from examples in the system prompt. A deterministic
+        # fallback is both more honest and more reliable; the semantic risk
+        # decision remains in the independent classifier below.
+        candidates = list(dict.fromkeys(_NUMERIC_LITERAL_RE.findall(text)))
+    candidates = candidates[:max_candidates]
 
     for candidate in candidates:
         classify_prompt = f"Procedure/instruction text:\n```\n{text}\n```\n\nSpecific literal to evaluate: {candidate!r}"

@@ -23,7 +23,13 @@ _CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL)
 
 def extract_code(text: str) -> str:
     match = _CODE_FENCE_RE.search(text)
-    return (match.group(1) if match else text).strip() + "\n"
+    code = (match.group(1) if match else text).strip()
+    # Local models occasionally emit an additional fence-only line after an
+    # otherwise valid fenced answer (observed in 5/8 historical FPE failures).
+    # A presentation marker is not Python and is safe to remove mechanically;
+    # never spend a Detective/Worker recovery call on this formatting residue.
+    code = "\n".join(line for line in code.splitlines() if line.strip() != "```").strip()
+    return code + "\n"
 
 
 def build_prompt(task: Task, skill_package: SkillPackage | None = None) -> str:
@@ -39,6 +45,35 @@ def build_prompt(task: Task, skill_package: SkillPackage | None = None) -> str:
         f"{context}"
         f"Buggy function (problem: {task.problem_id}):\n\n"
         f"```python\n{task.buggy_source}\n```\n\n"
+        "Return the corrected function."
+    )
+
+
+def build_recovery_prompt(
+    task: Task,
+    failed_source: str,
+    verifier_feedback: str,
+    skill_package: SkillPackage | None = None,
+    detective_hint: str | None = None,
+) -> str:
+    """Build a second-attempt prompt grounded in an objective failed test.
+
+    The original task and retrieved notes stay unchanged.  The failed attempt
+    and verifier output are data, not instructions; explicit delimiters keep
+    their roles clear for small local models.
+    """
+    base = build_prompt(task, skill_package).removesuffix("Return the corrected function.")
+    hint = f"\nDetective findings:\n{detective_hint}\n" if detective_hint else ""
+    return (
+        f"{base}"
+        "A previous correction failed the executable verifier. Repair that attempt using "
+        "the concrete feedback below. The verifier failure is the primary constraint: the new "
+        "function must directly eliminate every shown exception or failed assertion. Never return "
+        "the previous correction unchanged. Preserve behavior that is not implicated by the "
+        "failure and do not broaden the change speculatively.\n\n"
+        f"Previous correction:\n```python\n{failed_source.strip()}\n```\n\n"
+        f"Verifier feedback:\n```text\n{verifier_feedback.strip()}\n```\n"
+        f"{hint}\n"
         "Return the corrected function."
     )
 

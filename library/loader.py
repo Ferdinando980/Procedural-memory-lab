@@ -38,6 +38,7 @@ def _load_books_from(directory: Path) -> list[Book]:
                 supersedes=data.get("supersedes"),
                 superseded_by=data.get("superseded_by"),
                 generation_method=data.get("generation_method", "manual"),
+                decision_table=data.get("decision_table", []),
             )
         )
     return books
@@ -60,6 +61,13 @@ def load_archived_books() -> list[Book]:
     if not config.ARCHIVED_BOOKS_DIR.exists():
         return []
     return _load_books_from(config.ARCHIVED_BOOKS_DIR)
+
+
+def load_candidate_books() -> list[Book]:
+    """Unpromoted hypotheses, deliberately excluded from live routing."""
+    if not config.CANDIDATE_BOOKS_DIR.exists():
+        return []
+    return _load_books_from(config.CANDIDATE_BOOKS_DIR)
 
 
 def id_to_pattern_map() -> dict[str, str]:

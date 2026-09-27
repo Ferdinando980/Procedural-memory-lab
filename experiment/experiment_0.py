@@ -87,11 +87,11 @@ def main():
     # -- 2026-09-18, user-requested: a way to try new annotations (Detective,
     # in the future maybe skill_conflict) as ADDITIONAL configs without ever
     # touching what A/B/F/C themselves mean, so their historical numbers
-    # stay comparable. Currently only "FD" (F + Detective hint) is wired;
+    # stay comparable. Currently only "FD" (F + selective recovery) is wired;
     # naming a config here that this dict doesn't know about is a plain
     # KeyError, not a silent no-op.
     _EXTRA_CONFIG_SPECS = {
-        "FD": (small_adapter, True, False, True),  # Small + Librarian + Detective hint
+        "FD": (small_adapter, True, False, True),  # F + failure-triggered recovery
     }
     base_configs = [
         ("A", expert_adapter, False, False, False),

@@ -29,14 +29,21 @@ EVENT_BUILDING = {
     "PROMPT_BUILT": ("shop", "\U0001f3ea", "Negozio"),
     "MODEL_CALL_STARTED": ("shop", "\U0001f3ea", "Negozio"),
     "MODEL_CALL_FINISHED": ("shop", "\U0001f3ea", "Negozio"),
+    "RECOVERY_STARTED": ("hospital", "\U0001f3e5", "Ospedale"),
+    "DETECTIVE_RESULT": ("library", "\U0001f4da", "Biblioteca"),
+    "RECOVERY_MODEL_CALL_FINISHED": ("shop", "\U0001f3ea", "Negozio"),
+    "RECOVERY_VERIFICATION": ("hospital", "\U0001f3e5", "Ospedale"),
     "VERIFICATION": ("hospital", "\U0001f3e5", "Ospedale"),
     "QUEST_COMPLETED": ("home", "\U0001f3e0", "Casa"),
 }
 
-ROLE_LABELS = {"worker": "Apprentice", "librarian": "Retriever", "checker": "Verifier", "npc": "Quest"}
+ROLE_LABELS = {"worker": "Apprentice", "librarian": "Retriever", "detective": "Detective", "checker": "Verifier", "npc": "Quest"}
 # Which events carry authoritative (non-duplicated) real token counts per role --
 # PROMPT_BUILT/MODEL_CALL_STARTED are informational and would double-count the worker.
-TOKEN_SOURCE_EVENTS = {"MODEL_CALL_FINISHED", "RETRIEVAL_RESULT", "VERIFICATION"}
+TOKEN_SOURCE_EVENTS = {
+    "MODEL_CALL_FINISHED", "DETECTIVE_RESULT", "RECOVERY_MODEL_CALL_FINISHED",
+    "RETRIEVAL_RESULT", "VERIFICATION", "RECOVERY_VERIFICATION",
+}
 
 
 def _quest_order(records: list[dict], events: list[dict]) -> list[str]:

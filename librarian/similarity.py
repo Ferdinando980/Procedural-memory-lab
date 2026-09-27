@@ -64,6 +64,7 @@ from ..adapters import build_adapter
 from ..library import sections as sections_mod
 from ..library.loader import load_books
 from .librarian import _latest_per_pattern
+from ..verification.stabilizer import parse_reasoning_first_label
 
 VALID_LABELS = {"DUPLICATE", "NEAR_DUPLICATE", "RELATED", "DISTINCT"}
 
@@ -94,12 +95,9 @@ def classify_pair(book_a, book_b, adapter) -> dict:
         f"Book B -- \"{book_b.title}\" (pattern: {book_b.pattern_id}):\n```\n{book_b.procedure_text.strip()}\n```"
     )
     result = adapter.complete(prompt=prompt, system=_SIMILARITY_SYSTEM_PROMPT, max_tokens=300, thinking_budget=0)
-    lines = [l.strip() for l in result.text.strip().splitlines() if l.strip()]
-    reasoning = lines[0] if lines else ""
-    label = lines[1].upper() if len(lines) > 1 else ""
-    if label not in VALID_LABELS:
-        reasoning = f"[unparseable label {label!r}] {result.text.strip()}"
-        label = "UNPARSEABLE"
+    label, reasoning = parse_reasoning_first_label(result.text, VALID_LABELS)
+    if label == "UNPARSEABLE":
+        reasoning = f"[unparseable label] {result.text.strip()}"
     return {
         "book_a": book_a.id, "book_b": book_b.id,
         "pattern_a": book_a.pattern_id, "pattern_b": book_b.pattern_id,

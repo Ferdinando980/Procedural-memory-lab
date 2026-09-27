@@ -26,6 +26,7 @@ from ..adapters.base import ModelAdapter
 from ..agents.worker import SYSTEM_PROMPT, build_prompt, extract_code
 from ..experiment.events import emit
 from ..models import Book, SkillPackage, Task
+from .probe_generator import generate_probe_set
 
 _CONFIG_NAME = "ABLATION"
 
@@ -147,3 +148,49 @@ def run_substitution_ablation(
             result.per_variant[variant_label][task.task_id] = values
 
     return result
+
+
+def run_ablation_on_generated_probes(
+    experiment_id: str,
+    book: Book,
+    slot_name: str,
+    slot_variants: dict[str, str],
+    generator_adapter: ModelAdapter,
+    test_adapter: ModelAdapter,
+    extract_value: ValueExtractor,
+    reps: int = 1,
+    categories: tuple[str, ...] = ("A", "B", "C"),
+) -> AblationResult | None:
+    """Generalizes validate_probe_generator_milestone.py's floating_point_
+    equality-only check (2026-09-16) into reusable library code for any
+    code-domain Book, closing item 13's 'integrazione con substitution_
+    ablation.py' gap: generates fresh, self-checked A/B/C probes via
+    probe_generator.generate_probe_set (never seen by this Book's own
+    author), takes the no-hint one -- C, falling back to B, same precedent
+    as the milestone script since CATEGORY_C is often legitimately absent --
+    as the tracked task, and hands it to run_substitution_ablation exactly
+    as a hand-written canary.py task would be.
+
+    Returns None, not an empty AblationResult, when the generator produces
+    neither a B nor a C probe -- distinguishes 'nothing to ablate because the
+    generator itself failed' from 'ablation ran and found zero tracking',
+    the same two outcomes the milestone script already reports separately.
+
+    slot_variants/extract_value stay caller-supplied, same as
+    run_substitution_ablation itself -- auto-inferring which slot in an
+    arbitrary skill is worth testing is real, harder future work (see this
+    module's own docstring), not faked here."""
+    probes = generate_probe_set(book, generator_adapter, categories=categories)
+    no_hint_probe = probes.get("C") or probes.get("B")
+    if no_hint_probe is None:
+        return None
+    return run_substitution_ablation(
+        experiment_id=experiment_id,
+        book=book,
+        slot_name=slot_name,
+        slot_variants=slot_variants,
+        tracked_tasks=[no_hint_probe],
+        extract_value=extract_value,
+        adapter=test_adapter,
+        reps=reps,
+    )

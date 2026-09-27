@@ -1,5 +1,6 @@
 from ..library.loader import load_books
-from ..models import Book, SkillPackage, Task
+from ..models import Book, FailureRecord, SkillPackage, Task
+from .competence import CapabilityEstimate
 
 # Real, measured evidence (2026-08-19, prompted by external review), not a
 # guess: experiment/metrics.py's retrieval_waste_analysis(), run across all
@@ -77,7 +78,39 @@ def _latest_per_pattern(books: list[Book]) -> list[Book]:
     return list(best.values())
 
 
-def route(task: Task, max_books: int = 2, min_overlap: int = 1, respect_value_policy: bool = True) -> SkillPackage:
+def _competence_value(book: Book, task: Task, profile: dict[str, CapabilityEstimate]) -> float:
+    """Multiplier >= 1.0, added 2026-09-21 (TODO.md point 20): higher when
+    the Worker's own measured competence on the capabilities this Book
+    shares with the task is low or uncertain (worth retrieving), closer to
+    1.0 when already strong (retrieval likely wasted -- consistent with
+    experiment/metrics.py::retrieval_waste_analysis's real measured 81.3%
+    historical waste). Only capabilities this Book actually shares with the
+    task are considered -- a Book's OTHER tags say nothing about whether
+    THIS task needs it. A capability absent from the profile (never
+    observed) gets maximal gap AND maximal uncertainty -- same "unknown is
+    worth checking" reading as wilson_interval(0, 0) = (0.0, 1.0)."""
+    relevant = set(book.capability_tags) & set(task.capability_tags)
+    if not relevant:
+        return 1.0
+    weighted_gaps = []
+    for capability in relevant:
+        estimate = profile.get(capability)
+        if estimate is None:
+            weighted_gaps.append(1.0)  # unobserved: max gap, max uncertainty already folded in
+        else:
+            gap = 1.0 - estimate.mean
+            uncertainty = estimate.ci95[1] - estimate.ci95[0]
+            weighted_gaps.append(gap * (1.0 + uncertainty))
+    return 1.0 + (sum(weighted_gaps) / len(weighted_gaps))
+
+
+def route(
+    task: Task,
+    max_books: int = 2,
+    min_overlap: int = 1,
+    respect_value_policy: bool = True,
+    competence_profile: dict[str, CapabilityEstimate] | None = None,
+) -> SkillPackage:
     """Deterministic tag-overlap retrieval -- no model call, no embedding API, so
     routing itself never shows up as a hidden cost (design review D.6). At the
     20-50 Book scale of MVP-1 this is sufficient; embeddings/ANN only become
@@ -99,7 +132,21 @@ def route(task: Task, max_books: int = 2, min_overlap: int = 1, respect_value_po
     -- e viene unita al risultato in ogni caso, anche quando
     respect_value_policy fa scattare lo short-circuit sotto: NON conta ai
     fini di `coverage`, che resta il segnale di retrieval PER-PATTERN che
-    metrics.py/knowledge_map.py gia' usano com'e'."""
+    metrics.py/knowledge_map.py gia' usano com'e'.
+
+    competence_profile (default None, added 2026-09-21, TODO.md point 20,
+    librarian/competence.py::build_competence_profile/probe_capability):
+    when given, re-ranks the tag-overlap-matched candidates by an added
+    competence-gap signal (_competence_value above) instead of raw overlap
+    count alone -- a Book covering a capability the Worker is already
+    confident in sorts lower than one covering a capability with a low or
+    uncertain estimate, even at equal tag overlap. None (the default)
+    reproduces today's tag-overlap-only ranking exactly -- no behavior
+    change for any existing caller. Deliberately not computed inside route()
+    itself: building/refreshing a profile can involve real model calls
+    (probe_capability), which would break this function's own "no hidden
+    cost" invariant stated above -- a caller builds it as a separate,
+    explicit step and passes the result in here."""
     all_books = load_books()
     always_books = _always_included_books(all_books)
 
@@ -112,16 +159,60 @@ def route(task: Task, max_books: int = 2, min_overlap: int = 1, respect_value_po
             continue  # gia' incluso incondizionatamente, non farlo pesare due volte sul matching per tag
         overlap = len(set(book.capability_tags) & set(task.capability_tags))
         if overlap >= min_overlap:
-            scored.append((overlap, book))
+            rank_key = overlap if competence_profile is None else overlap * _competence_value(book, task, competence_profile)
+            scored.append((rank_key, overlap, book))
 
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    top_books = [book for _, book in scored[:max_books]]
+    scored.sort(key=lambda triple: triple[0], reverse=True)
+    top_books = [book for _, _, book in scored[:max_books]]
 
     if not top_books:
         coverage = "NONE"
-    elif scored[0][0] == len(task.capability_tags):
+    elif scored[0][1] == len(task.capability_tags):
         coverage = "FULL"
     else:
         coverage = "PARTIAL"
 
     return SkillPackage(books=always_books + top_books, coverage=coverage)
+
+
+def route_after_failure(
+    task: Task,
+    failure: FailureRecord,
+    initial_package: SkillPackage | None = None,
+    max_books: int = 2,
+) -> SkillPackage:
+    """Second retrieval using a verifier-certified failure as evidence.
+
+    This bypasses the pre-emptive low-value suppression: a Book that was not
+    worth injecting into every first attempt can still be useful after the
+    relevant task has actually failed. The failure is data only; routing is
+    deterministic and never executes or follows text contained in it.
+    """
+    if failure.status != "VERIFIED_FAILURE":
+        raise ValueError("post-failure retrieval requires VERIFIED_FAILURE evidence")
+    initial = list(initial_package.books) if initial_package else []
+    existing = {book.pattern_id for book in initial}
+    failure_text = f"{failure.verifier_feedback}\n{failure.failed_source}".lower()
+    task_tags = set(task.capability_tags)
+    scored = []
+    for book in _latest_per_pattern(load_books()):
+        if book.pattern_id in existing:
+            continue
+        tag_overlap = len(task_tags & set(book.capability_tags))
+        lexical_hits = sum(
+            1 for tag in book.capability_tags
+            if tag.lower().replace("-", " ") in failure_text
+        )
+        exact_pattern = int(book.pattern_id == task.pattern_id)
+        score = exact_pattern * 10 + tag_overlap * 3 + lexical_hits
+        if score:
+            scored.append((score, book))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    books = initial + [book for _, book in scored[:max(0, max_books - len(initial))]]
+    if not books:
+        coverage = "NONE"
+    elif any(book.pattern_id == task.pattern_id for book in books):
+        coverage = "FULL"
+    else:
+        coverage = "PARTIAL"
+    return SkillPackage(books=books[:max_books], coverage=coverage)

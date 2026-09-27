@@ -66,3 +66,19 @@ procedure_text: "Symptom: Float comparisons (==, !=, in) fail due to precision.\
   \ you now believe it is, do not just widen the number."
 derived_from: book_floating_point_equality_v4_v5_v6
 generation_method: rule_repair
+decision_table:
+- trigger: the task explicitly states a tolerance, margin, or percentage
+  question: Does the task explicitly state a numeric tolerance, margin, or percentage?
+  action: use that stated tolerance, scaled exactly as the task specifies
+  fallback: false
+- trigger: the task names a domain with a known scale-independent convention
+  question: Does the task explicitly name a currency, monetary amount, or another domain convention?
+  action: use that convention
+  fallback: false
+- trigger: the compared values are measurements written with meaningful decimal precision
+  question: Do function or parameter names contain measurement terms such as sensor, reading, temperature, distance, or weight?
+  action: derive tolerance from the smaller reported decimal precision
+  fallback: false
+- trigger: no explicit tolerance, known convention, or meaningful measurement precision is present
+  action: use a strict machine-precision default and flag it for review
+  fallback: true

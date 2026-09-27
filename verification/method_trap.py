@@ -46,8 +46,8 @@ _METHOD_SYSTEM_PROMPT = (
     "value. Such a method is only CORRECT when its triggering condition "
     "genuinely holds -- applying it to a superficially-similar but different "
     "root cause would be wrong. Identify: the method itself, a short literal "
-    "marker that would appear in code actually using it (e.g. '.casefold(' "
-    "for a case-normalization method), and the specific condition under which "
+    "marker that would appear in code actually using it (e.g. '.casefold(', "
+    "'<=', or '//' for the corresponding method), and the specific condition under which "
     "applying it is correct (so a case where that condition does NOT hold, "
     "despite a similar-looking symptom, can be constructed).\n\n"
     "First, in the reasoning field, name the method and state whether a "
@@ -55,9 +55,10 @@ _METHOD_SYSTEM_PROMPT = (
     "Return ONLY a single JSON object, no prose, no markdown fences:\n"
     '- If applicable: {"reasoning": "one sentence, written first", '
     '"has_condition": true, "method": "one sentence, what the procedure '
-    'prescribes", "method_marker": "a short literal substring that would '
-    'appear verbatim in code applying this method, copied from the procedure '
-    'text if it appears there", "condition": "one sentence: when is applying '
+    'prescribes", "method_marker": "ONE short code token or expression, at '
+    'most 40 characters, copied VERBATIM from the procedure text; never a '
+    'prose description or a list of alternatives", "condition": "one '
+    'sentence: when is applying '
     'this method actually correct"}\n'
     '- If the method is universally correct whenever the skill\'s own symptom '
     'applies (no meaningful "wrong context" case exists): {"reasoning": "one '
@@ -121,6 +122,11 @@ def extract_method(book: Book, adapter: ModelAdapter) -> MethodSpec | None:
         return None
     method_marker = str(data.get("method_marker") or "").strip()
     if not method_marker:
+        return None
+    # Downstream this is searched as a literal substring in generated code.
+    # A prose description is therefore not a usable marker, even when the
+    # surrounding semantic classification is plausible.
+    if len(method_marker) > 40 or method_marker not in book.procedure_text:
         return None
     method = str(data.get("method") or "").strip()
     condition = str(data.get("condition") or "").strip()

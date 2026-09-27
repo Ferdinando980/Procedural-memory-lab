@@ -29,6 +29,7 @@ import re
 from ..adapters.base import ModelAdapter
 from ..domain.verifier import run_tests
 from ..models import Book, Task
+from .stabilizer import extract_json_object
 
 # Mirrors canary.py's own category definitions (module docstring) exactly --
 # this is the automation of that existing, hand-validated taxonomy, not a new
@@ -79,8 +80,6 @@ _PROBE_SYSTEM_PROMPT = (
     "the skill's own example measures nothing."
 )
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 _SPLIT_BY_CATEGORY = {"A": "CATEGORY_A", "B": "CATEGORY_B", "C": "CATEGORY_C"}
 
 
@@ -97,12 +96,13 @@ def _build_probe_prompt(book: Book, category: str, avoid_problem_ids: list[str],
 
 
 def _parse_generated_task(text: str, book: Book, category: str) -> Task | None:
-    match = _JSON_RE.search(text)
-    if not match:
-        return None
-    try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError:
+    # extract_json_object (verification/stabilizer.py), not the old greedy
+    # _JSON_RE regex -- balanced-brace scanning instead of first-'{'-to-
+    # last-'}', the confirmed cause of 'invalid Qwen verdict' elsewhere
+    # (benchmark_skill_evaluation_holdout.py, 2026-09-21) whenever the
+    # generated text has any extra brace before/after the real JSON object.
+    data = extract_json_object(text)
+    if data is None:
         return None
     required = {"problem_id", "fn_name", "buggy_source", "test_source"}
     if not required.issubset(data) or not isinstance(data["problem_id"], str):
@@ -185,3 +185,254 @@ def generate_probe_set(
         if task is not None:
             used_ids.append(task.problem_id)
     return probes
+
+
+# Generic, domain-independent evaluation suites
+import json
+import re
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from ..adapters.base import ModelAdapter
+from ..models import Book
+from .stabilizer import majority_vote
+
+
+PROBE_KINDS = ("applicable", "transfer", "boundary", "adversarial", "negative_control")
+
+
+@dataclass(frozen=True)
+class EvaluationProbe:
+    id: str
+    kind: str
+    request: str
+    should_apply: bool
+    expected_behavior: str
+    rubric: list[str]
+
+
+@dataclass(frozen=True)
+class EvaluationSuite:
+    book_id: str
+    book_version: int
+    criterion: str
+    probes: list[EvaluationProbe]
+    generated_at: str
+
+
+@dataclass(frozen=True)
+class ProbeVerdict:
+    probe_id: str
+    direct_score: float
+    skilled_score: float
+    winner: str
+    reason: str
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[^\W_]+", text.casefold(), flags=re.UNICODE)
+
+
+def shared_ngrams(left: str, right: str, size: int = 6) -> set[str]:
+    a, b = _words(left), _words(right)
+    if len(a) < size or len(b) < size:
+        return set()
+    source = {" ".join(a[i:i + size]) for i in range(len(a) - size + 1)}
+    return {" ".join(b[i:i + size]) for i in range(len(b) - size + 1)} & source
+
+
+def validate_suite(book: Book, probes: list[EvaluationProbe]) -> list[str]:
+    errors: list[str] = []
+    ids, requests = set(), set()
+    for probe in probes:
+        if probe.kind not in PROBE_KINDS:
+            errors.append(f"{probe.id}: invalid kind")
+        if not probe.id or probe.id in ids:
+            errors.append(f"{probe.id or '(empty)'}: duplicate or empty id")
+        ids.add(probe.id)
+        normalized = " ".join(_words(probe.request))
+        if not normalized or normalized in requests:
+            errors.append(f"{probe.id}: duplicate or empty request")
+        requests.add(normalized)
+        overlap = shared_ngrams(book.procedure_text, probe.request)
+        if overlap:
+            errors.append(f"{probe.id}: copied phrase: {sorted(overlap)[0]}")
+        if not probe.expected_behavior or not probe.rubric:
+            errors.append(f"{probe.id}: missing expected behavior or rubric")
+        if (probe.kind == "negative_control") == probe.should_apply:
+            errors.append(f"{probe.id}: wrong should_apply value")
+    for kind in PROBE_KINDS:
+        if not any(probe.kind == kind for probe in probes):
+            errors.append(f"missing {kind}")
+    return errors
+
+
+_COMPILE_SYSTEM = """You are the Probe Generator. Compile a fresh evaluation for one arbitrary
+procedure. Generate exactly five independent user requests: applicable;
+transfer (same principle in a distant context); boundary; adversarial; and
+negative_control where the procedure must not be applied. Do not answer the
+requests. Do not reuse examples, names, scenarios, or any six-word sequence
+from the procedure. Derive observable expected behavior and a concrete rubric
+for each request. The negative control must test selectivity, not obedience.
+Return ONLY JSON: {"criterion":"...","probes":[{"id":"...","kind":"applicable|transfer|boundary|adversarial|negative_control","request":"...","should_apply":true,"expected_behavior":"...","rubric":["..."]}]}.
+The procedure may concern any domain. Never assume programming, tests, study,
+writing, or any fixed subject."""
+
+
+def compile_evaluation_suite(book: Book, adapter: ModelAdapter, max_attempts: int = 3) -> EvaluationSuite:
+    feedback = ""
+    for _ in range(max_attempts):
+        prompt = f"TITLE: {book.title}\n\nPROCEDURE:\n```\n{book.procedure_text}\n```"
+        if feedback:
+            prompt += f"\n\nPrevious suite was rejected:\n{feedback}"
+        completion = adapter.complete(prompt, system=_COMPILE_SYSTEM, max_tokens=4096, thinking_budget=0)
+        data = extract_json_object(completion.text)
+        if data is None:
+            feedback = "no JSON object"
+            continue
+        try:
+            probes = [
+                EvaluationProbe(
+                    id=str(item.get("id", "")).strip(),
+                    kind=str(item.get("kind", "")).strip(),
+                    request=str(item.get("request", "")).strip(),
+                    should_apply=item.get("should_apply") is True,
+                    expected_behavior=str(item.get("expected_behavior", "")).strip(),
+                    rubric=[str(value).strip() for value in item.get("rubric", []) if str(value).strip()],
+                )
+                for item in data.get("probes", []) if isinstance(item, dict)
+            ]
+        except (json.JSONDecodeError, TypeError, AttributeError) as error:
+            feedback = f"invalid JSON shape: {error}"
+            continue
+        errors = validate_suite(book, probes)
+        if errors:
+            feedback = "\n".join(errors)
+            continue
+        return EvaluationSuite(
+            book.id, book.version, str(data.get("criterion", "")).strip(), probes,
+            datetime.now(timezone.utc).isoformat(),
+        )
+    raise ValueError(f"could not compile a valid evaluation suite: {feedback}")
+
+
+_ANSWER_SYSTEM = "Respond to the user request directly."
+_JUDGE_SYSTEM = """Blindly score response A and response B against only the request,
+expected behavior, and rubric. Do not reward phrase overlap. For a negative
+control, penalize unnecessary application of the tested behavior. Return ONLY
+JSON: {"score_a":0,"score_b":0,"winner":"A|B|TIE|UNKNOWN","reason":"..."}."""
+
+
+def _judge_pair(probe: EvaluationProbe, a_text: str, b_text: str, index: int, judge: ModelAdapter):
+    """One blind judge call over a FIXED response pair -- factored out of
+    evaluate_suite (2026-09-21) so evaluate_suite_stability can repeat just
+    this call against the same answers without regenerating them, isolating
+    judge-verdict noise from answer-generation noise. Returns (ProbeVerdict,
+    CompletionResult) -- the raw completion is kept so a caller can account
+    real judge cost/tokens per repeated call, same as any other adapter call
+    in this package."""
+    prompt = (
+        f"REQUEST:\n{probe.request}\n\nEXPECTED:\n{probe.expected_behavior}\n\n"
+        f"RUBRIC:\n- " + "\n- ".join(probe.rubric) + f"\n\nRESPONSE A:\n{a_text}\n\nRESPONSE B:\n{b_text}"
+    )
+    result = judge.complete(prompt, system=_JUDGE_SYSTEM, max_tokens=512, thinking_budget=0)
+    data = extract_json_object(result.text)
+    if data is None:
+        return ProbeVerdict(probe.id, 0, 0, "UNKNOWN", f"judge returned no JSON; raw={result.text[:300]!r}"), result
+    try:
+        score_a, score_b = float(data.get("score_a", 0)), float(data.get("score_b", 0))
+        winner = str(data.get("winner", "UNKNOWN")).upper()
+        direct_score, skilled_score = (score_a, score_b) if index % 2 == 0 else (score_b, score_a)
+        mapped = {"A": "DIRECT", "B": "SKILLED"} if index % 2 == 0 else {"A": "SKILLED", "B": "DIRECT"}
+        return ProbeVerdict(probe.id, direct_score, skilled_score, mapped.get(winner, winner), str(data.get("reason", ""))), result
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return ProbeVerdict(probe.id, 0, 0, "UNKNOWN", "judge returned invalid JSON"), result
+
+
+def evaluate_suite(
+    book: Book,
+    suite: EvaluationSuite,
+    worker: ModelAdapter,
+    judge: ModelAdapter,
+) -> list[ProbeVerdict]:
+    verdicts = []
+    for index, probe in enumerate(suite.probes):
+        direct = worker.complete(probe.request, system=_ANSWER_SYSTEM, max_tokens=2048)
+        skilled = worker.complete(probe.request, system=book.procedure_text, max_tokens=2048)
+        # Alternate labels to reduce fixed first-position preference.
+        a, b = (direct.text, skilled.text) if index % 2 == 0 else (skilled.text, direct.text)
+        verdict, _ = _judge_pair(probe, a, b, index, judge)
+        verdicts.append(verdict)
+    return verdicts
+
+
+@dataclass(frozen=True)
+class ProbeStability:
+    probe_id: str
+    verdict: ProbeVerdict            # majority verdict across reps, or UNSTABLE (see below)
+    agreement: float                 # majority_count / judge_reps
+    samples: tuple[str, ...]         # winner label per repeated judge call, in order
+    judge_cost_usd: float            # total judge $ spent measuring this one probe's stability
+
+
+def evaluate_suite_stability(
+    book: Book,
+    suite: EvaluationSuite,
+    worker: ModelAdapter,
+    judge: ModelAdapter,
+    judge_reps: int = 3,
+    adaptive: bool = False,
+    decisive_margin: float = 3.0,
+) -> list[ProbeStability]:
+    """Repeats ONLY the judge call (Clessidra-bounded at judge_reps, never
+    unbounded sampling) against a FIXED direct/skilled answer pair per probe
+    -- the same isolate-the-noisy-step methodology stabilizer.py documents
+    for every other holistic yes/no LLM judgment in this package ('does this
+    skill have a risky slot?', etc.), applied here to evaluate_suite's own
+    judge.complete() call, which nothing covered before this. A STOP_UPLIFT/
+    STOP_HARM decision built on a single unrepeated judge call per probe
+    cannot distinguish a real effect from judge noise on that one call.
+
+    Deliberately NOT built on stabilizer.vote_for_result: that function's
+    fail-closed behavior only covers found-vs-not-found ties (a verdict is
+    always produced here, never None), not a genuine three-way split among
+    DIRECT/SKILLED/TIE/UNKNOWN -- letting Counter's insertion-order tie-break
+    silently pick a winner in that case would hide exactly the instability
+    this function exists to surface. Uses stabilizer.majority_vote instead
+    (2026-09-21), which does surface that kind of tie as None -- shared with
+    verification.benchmark_self_consistency's own vote over Worker
+    candidates instead of two copies of the same tie rule.
+
+    adaptive (2026-09-21, TODO.md point 20, application #2 of the atom/
+    particle gate): when True, stops after the FIRST judge call if its own
+    score margin already looks decisive (|direct_score - skilled_score| >=
+    decisive_margin) -- an 'atom' verdict, ReASC's single-sample decision
+    stage applied to this judge instead of to self-consistency sampling.
+    Spends the full judge_reps budget only on genuinely close calls
+    ('particle'). False (default) reproduces today's fixed-reps behavior
+    exactly, no change for any existing caller."""
+    results: list[ProbeStability] = []
+    for index, probe in enumerate(suite.probes):
+        direct = worker.complete(probe.request, system=_ANSWER_SYSTEM, max_tokens=2048)
+        skilled = worker.complete(probe.request, system=book.procedure_text, max_tokens=2048)
+        a, b = (direct.text, skilled.text) if index % 2 == 0 else (skilled.text, direct.text)
+        samples: list[ProbeVerdict] = []
+        judge_cost = 0.0
+        for rep in range(judge_reps):
+            verdict, completion = _judge_pair(probe, a, b, index, judge)
+            samples.append(verdict)
+            judge_cost += completion.cost_usd
+            if adaptive and rep == 0 and abs(verdict.direct_score - verdict.skilled_score) >= decisive_margin:
+                break
+        counts = Counter(sample.winner for sample in samples)
+        winner_label = majority_vote([sample.winner for sample in samples])
+        top_count = counts.most_common(1)[0][1]
+        agreement = top_count / len(samples) if samples else 0.0
+        if winner_label is None:
+            majority = ProbeVerdict(probe.id, 0, 0, "UNSTABLE", f"judge tied across {len(samples)} reps: {dict(counts)}")
+        else:
+            majority = next(sample for sample in samples if sample.winner == winner_label)
+        results.append(ProbeStability(probe.id, majority, agreement, tuple(sample.winner for sample in samples), judge_cost))
+    return results
+

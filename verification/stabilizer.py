@@ -44,6 +44,28 @@ T = TypeVar("T")
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+
+def parse_reasoning_first_label(text: str, valid_labels: set[str]) -> tuple[str, str]:
+    """Parse a reasoning-first verdict without making formatting noise fatal.
+
+    The prompt asks for reasoning followed by a label. Local models sometimes
+    number the two lines (``2. PRESERVED``) or keep both on one line
+    (``none PRESERVED``). Those responses still contain an unambiguous final
+    verdict and should not become UNPARSEABLE. The last label occurrence wins,
+    preserving the requested reasoning-before-verdict semantics.
+    """
+    labels = sorted(valid_labels, key=len, reverse=True)
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    matches = list(re.finditer(rf"(?<![A-Z_])({label_pattern})(?![A-Z_])", text.upper()))
+    if not matches:
+        return "UNPARSEABLE", text.strip()
+    match = matches[-1]
+    label = match.group(1)
+    reasoning = (text[:match.start()] + text[match.end():]).strip()
+    reasoning = re.sub(r"(?:^|\n)\s*\d+[.)]\s*", "\n", reasoning).strip()
+    reasoning = reasoning.strip(" \t\r\n,;:-") or "none"
+    return label, reasoning
+
 _COUNTER_EVIDENCE_SYSTEM_PROMPT = (
     "You previously produced a classification about one specific detail of a "
     "text. Now act as a skeptic reviewing your own conclusion: try to find the "
@@ -64,13 +86,10 @@ _CONTENT_PRESERVATION_SYSTEM_PROMPT = (
     "diagnostic detail, or fact that was present in the original? Shortening, "
     "rewording, reordering, and even adding NEW material are all fine and do "
     "not count as a problem -- only silently dropping something that was "
-    "there is.\n\n"
-    "Reply with EXACTLY two lines, in this order: on line 1, name the "
-    "specific step/detail (if any) that is missing from the rewrite, or "
-    "'none' if nothing is missing -- written first, before you commit to a "
-    "label. On line 2, exactly one word: PRESERVED (all original content is "
-    "present, in any form) or LOST_CONTENT (something from the original is "
-    "missing)."
+    "there is. Answer on the first line with exactly one word: PRESERVED (all "
+    "original content is present, in any form) or LOST_CONTENT (something "
+    "from the original is missing). On the next line, name the specific "
+    "step/detail that is missing (or 'none' if PRESERVED)."
 )
 
 
@@ -95,22 +114,16 @@ def check_content_preserved(original_text: str, rewritten_text: str, adapter: Mo
     `UNPARSEABLE` is a real, distinct outcome, never coerced into PRESERVED or
     LOST_CONTENT -- callers must treat it as fail-closed (do not accept).
 
-    2026-09-18 (user-requested, applied project-wide despite this function's
-    own earlier "kept byte-for-byte identical" note): added a delimiter
-    around the embedded text and swapped the two reply lines so the missing-
-    detail reasoning is written BEFORE the final label, not after -- see
-    template-instructions.md. This changes the prompt's wording/shape,
-    unlike every prior edit to this function; re-validate against
-    optimizer.py's own historical compression results before trusting this
-    exact wording as much as the untouched original was trusted."""
-    prompt = f"Original procedure:\n```\n{original_text.strip()}\n```\n\nCompressed rewrite:\n```\n{rewritten_text.strip()}\n```"
-    result = adapter.complete(prompt=prompt, system=_CONTENT_PRESERVATION_SYSTEM_PROMPT, max_tokens=300, thinking_budget=0)
-    lines = [l.strip() for l in result.text.strip().splitlines() if l.strip()]
-    reasoning = lines[0] if lines else ""
-    label = lines[1].upper() if len(lines) > 1 else ""
-    if label not in {"PRESERVED", "LOST_CONTENT"}:
-        reasoning = f"[unparseable label {label!r}] {result.text.strip()}"
-        label = "UNPARSEABLE"
+    2026-09-20: the 2026-09-18 reasoning-first/delimiter rollout was tested
+    against optimizer.py's historical compression corpus. It regressed one
+    known floating-point compression from PRESERVED 3/3 to mostly
+    LOST_CONTENT, so the mature prompt and payload shape were restored. Only
+    the parser was made more tolerant of harmless formatting variants."""
+    prompt = f"Original procedure:\n{original_text.strip()}\n\nCompressed rewrite:\n{rewritten_text.strip()}"
+    result = adapter.complete(prompt=prompt, system=_CONTENT_PRESERVATION_SYSTEM_PROMPT, max_tokens=200, thinking_budget=0)
+    label, reasoning = parse_reasoning_first_label(result.text, {"PRESERVED", "LOST_CONTENT"})
+    if label == "UNPARSEABLE":
+        reasoning = f"[unparseable label] {result.text.strip()}"
     return {"label": label, "reasoning": reasoning}
 
 
@@ -149,12 +162,9 @@ def check_concreteness_preserved(original_text: str, rewritten_text: str, adapte
     likely reject more often than intended."""
     prompt = f"Original procedure:\n```\n{original_text.strip()}\n```\n\nRewrite:\n```\n{rewritten_text.strip()}\n```"
     result = adapter.complete(prompt=prompt, system=_CONCRETENESS_PRESERVATION_SYSTEM_PROMPT, max_tokens=300, thinking_budget=0)
-    lines = [l.strip() for l in result.text.strip().splitlines() if l.strip()]
-    reasoning = lines[0] if lines else ""
-    label = lines[1].upper() if len(lines) > 1 else ""
-    if label not in {"PRESERVED", "LOST_CONCRETENESS"}:
-        reasoning = f"[unparseable label {label!r}] {result.text.strip()}"
-        label = "UNPARSEABLE"
+    label, reasoning = parse_reasoning_first_label(result.text, {"PRESERVED", "LOST_CONCRETENESS"})
+    if label == "UNPARSEABLE":
+        reasoning = f"[unparseable label] {result.text.strip()}"
     return {"label": label, "reasoning": reasoning}
 
 
@@ -191,6 +201,100 @@ def vote_for_result(identify_fn: Callable[[], "T | None"], key_fn: Callable[["T"
     keys = [key_fn(r) for r in found]
     mode_key, _ = Counter(keys).most_common(1)[0]
     return next(r for r, k in zip(found, keys) if k == mode_key)
+
+
+def extract_json_object(text: str) -> dict | None:
+    """Robust JSON object extraction via balanced-brace scanning (2026-09-21)
+    -- NOT a greedy first-'{'-to-last-'}' regex/index() slice. The naive
+    version (text[text.index('{'):text.rindex('}')+1], used in
+    benchmark_skill_evaluation_holdout.py::qwen_phase) grabs the wrong span
+    whenever the surrounding prose has ANY extra brace before the real JSON
+    starts or after it ends -- e.g. a judge's own 'reason' field quoting a
+    response that itself mentions a dict/code snippet with braces. This is
+    the confirmed cause investigated for 'invalid Qwen verdict', seen on two
+    separate judge runs (calibration and new_holdout, 2026-09-20/21) with no
+    other diagnosis possible because the raw text wasn't preserved on
+    failure either (see qwen_phase's own fix, same date).
+
+    Scans for a '{', tracks brace depth while a simple state machine
+    ignores braces inside string literals (so a quoted '}' in a value
+    doesn't miscount depth), and returns the first BALANCED span that
+    parses as a JSON object. A candidate span that balances but fails
+    json.loads (e.g. a stray '{...}' in surrounding prose that happens to
+    close before any real JSON starts -- caught by this module's own
+    tests, not hypothetical) does not give up immediately: the scan
+    resumes from the NEXT '{' after the failed candidate's start, exactly
+    like a human skimming past a false start. Only an unbalanced tail
+    (never closes before the text ends -- e.g. truncated by a max_tokens
+    cutoff) is treated as a genuine, unrecoverable failure. None when no
+    candidate ever parses as a JSON object -- callers keep their own
+    fail-closed handling for that case, this only makes the extraction
+    step itself correct instead of luck-dependent."""
+    search_from = 0
+    while True:
+        start = text.find("{", search_from)
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        end: int | None = None
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end is None:
+            return None  # unbalanced through the rest of the text -- nothing left to retry
+        try:
+            value = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            search_from = start + 1  # false start (e.g. a stray brace in prose) -- try the next '{'
+            continue
+        return value if isinstance(value, dict) else None
+
+
+def majority_vote(keys: list[str]) -> str | None:
+    """Generic majority vote over already-computed keys/labels (2026-09-21)
+    -- complements vote_for_result for callers that need a genuine multi-way
+    tie surfaced explicitly rather than silently broken by Counter's
+    insertion order. vote_for_result's own fail-closed guarantee covers only
+    the found-vs-not-found split (see its docstring): every sample it is
+    given is already 'found', so a tie between two or more DISTINCT keys
+    falls through to Counter.most_common()[0], an arbitrary first-encountered
+    pick -- fine when one caller only cares 'is there a value at all', wrong
+    when the caller needs to know 'did the samples actually agree'.
+
+    Written to remove a real duplication: probe_generator.
+    evaluate_suite_stability and verification.benchmark_self_consistency
+    both needed this exact tie rule (return the modal key, or None when the
+    top spot is tied) for two different repeated-LLM-output voting
+    problems -- the judge's verdict across judge_reps, and the Worker's
+    candidate code across k self-consistency samples. Factored here instead
+    of copied twice, so the two places in this package that vote on
+    repeated output share one tie rule, not two that could quietly drift
+    apart."""
+    if not keys:
+        return None
+    counts = Counter(keys)
+    ranked = counts.most_common()
+    if len(ranked) > 1 and ranked[1][1] == ranked[0][1]:
+        return None
+    return ranked[0][0]
 
 
 def survives_adversarial_check(text: str, subject: str, claim_summary: str, adapter: ModelAdapter) -> bool:

@@ -41,7 +41,7 @@ from ..agents.worker import SYSTEM_PROMPT, build_prompt, extract_code
 from ..domain.verifier import run_tests
 from ..experiment.events import emit
 from ..models import Book, SkillPackage, Task
-from .stabilizer import survives_adversarial_check, vote_for_result
+from .stabilizer import parse_reasoning_first_label, survives_adversarial_check, vote_for_result
 
 _RULE_SYSTEM_PROMPT = (
     "You inspect a procedure ('skill') written to help an economical language "
@@ -271,12 +271,12 @@ def run_rule_generalization_check(
         f"Response A:\n```\n{code_a}\n```\n\nResponse B:\n```\n{code_b}\n```"
     )
     judged = judge_adapter.complete(prompt=judge_prompt, system=_COMPARE_SYSTEM_PROMPT, max_tokens=1024, thinking_budget=0)
-    lines = [l.strip() for l in judged.text.strip().splitlines() if l.strip()]
-    # Ordine invertito (2026-09-18): reasoning scritto PRIMA sulla riga 1,
-    # l'etichetta finale sulla riga 2 -- stesso principio del campo
-    # "reasoning" nei giudizi JSON, applicato qui al formato a due righe.
-    judge_reason = lines[0] if lines else ""
-    label = lines[1].upper() if len(lines) > 1 else ""
+    # Ordine invertito (2026-09-18): reasoning scritto PRIMA, etichetta finale.
+    # Il parser tollera numerazione o una sola riga senza perdere un verdetto
+    # altrimenti inequivocabile (comportamento osservato con Gemma locale).
+    label, judge_reason = parse_reasoning_first_label(
+        judged.text, {"GENERALIZES", "DOES_NOT_GENERALIZE"}
+    )
     if label == "GENERALIZES":
         generalizes = True
     elif label == "DOES_NOT_GENERALIZE":

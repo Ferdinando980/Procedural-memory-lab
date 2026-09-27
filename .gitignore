@@ -2,7 +2,13 @@ __pycache__/
 *.pyc
 .env
 .env.local
+.env.*
+!.env.example
 *.key
 *.pem
 credentials.json
+Secrets/
+graphify-out/
+logs/*
+!logs/.gitkeep
 library/_repair_scratch/

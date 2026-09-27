@@ -421,6 +421,101 @@ def test_reserved_case_in_list():
     assert is_valid_username("root", ["Admin", "Root"]) is False
 ''',
     },
+    # Aggiunti 2026-09-21 per il punto 12 di TODO.md (holdout fresco per la
+    # Compagnia di recovery, mai usati per tarare enumerate_local_
+    # transformations/ROUTES/SearchBudget). safe_divide e sum_to_n sono
+    # problemi nuovi, mai comparsi in nessun BUG_PATTERNS esistente.
+    "safe_divide": {
+        "fn_name": "safe_divide",
+        "correct_source": '''def safe_divide(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return None
+''',
+        "test_source": '''def test_normal_division():
+    assert safe_divide(10, 2) == 5.0
+
+def test_division_by_zero_returns_none():
+    assert safe_divide(10, 0) is None
+
+def test_division_by_zero_negative():
+    assert safe_divide(-4, 0) is None
+''',
+    },
+    "sum_to_n": {
+        "fn_name": "sum_to_n",
+        "correct_source": '''def sum_to_n(n):
+    if n <= 0:
+        return 0
+    return n + sum_to_n(n - 1)
+''',
+        "test_source": '''def test_positive_n():
+    assert sum_to_n(5) == 15
+
+def test_one():
+    assert sum_to_n(1) == 1
+
+def test_zero():
+    assert sum_to_n(0) == 0
+''',
+    },
+    "parse_int_or_none": {
+        "fn_name": "parse_int_or_none",
+        "correct_source": '''def parse_int_or_none(s):
+    try:
+        return int(s)
+    except ValueError:
+        return None
+''',
+        "test_source": '''def test_valid_string():
+    assert parse_int_or_none("42") == 42
+
+def test_invalid_string_returns_none():
+    assert parse_int_or_none("abc") is None
+
+def test_another_invalid_string():
+    assert parse_int_or_none("12.5") is None
+''',
+    },
+    # Terza istanza per pattern (2026-09-21), per superare la soglia
+    # min_failures=3 di recovery_policy.recommend() e ottenere una vera
+    # decisione invece di COLLECT_MORE_FAILURES -- vedi TODO.md punto 12.
+    "first_or_default": {
+        "fn_name": "first_or_default",
+        "correct_source": '''def first_or_default(items, default):
+    try:
+        return items[0]
+    except IndexError:
+        return default
+''',
+        "test_source": '''def test_non_empty_list():
+    assert first_or_default([1, 2, 3], 0) == 1
+
+def test_empty_list_returns_default():
+    assert first_or_default([], 0) == 0
+
+def test_empty_list_returns_default_again():
+    assert first_or_default([], -1) == -1
+''',
+    },
+    "fibonacci": {
+        "fn_name": "fibonacci",
+        "correct_source": '''def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+''',
+        "test_source": '''def test_fib_five():
+    assert fibonacci(5) == 5
+
+def test_fib_one():
+    assert fibonacci(1) == 1
+
+def test_fib_zero():
+    assert fibonacci(0) == 0
+''',
+    },
 }
 
 BUG_PATTERNS = {
@@ -479,6 +574,23 @@ BUG_PATTERNS = {
     "wrong_string_case_comparison": {
         "capability_tags": ["case-sensitivity", "string-comparison"],
         "description": "Two strings are compared directly (== or 'in') without normalizing case first, so semantically-matching values with different casing are wrongly treated as distinct.",
+    },
+    # Aggiunti 2026-09-21 per il punto 12 (holdout fresco della Compagnia di
+    # recovery, verification/recovery_party.py + code_recovery_party.py):
+    # MAI usati per tarare enumerate_local_transformations, ROUTES,
+    # SearchBudget o qualunque altro parametro della ricerca -- deliberatamente
+    # NOVEL come variable_shadowing/incorrect_sort_key_or_order/wrong_return_
+    # in_loop sopra: nessun Book, così il Librarian non recupera nulla e la
+    # misura riguarda solo il Worker + il motore di ricerca stesso. Non
+    # aggiungere un Book per questi due pattern: farlo vanificherebbe la
+    # freschezza dell'holdout per qualunque futura riverifica del punto 12.
+    "wrong_exception_type_caught": {
+        "capability_tags": ["exception-handling", "wrong-except-type"],
+        "description": "A try/except catches the wrong exception type, letting the real failure mode propagate uncaught instead of being handled.",
+    },
+    "recursive_missing_base_case": {
+        "capability_tags": ["recursion", "base-case"],
+        "description": "A recursive function's base case is missing or uses the wrong boundary condition, causing unbounded recursion or a wrong terminal value instead of a controlled stop.",
     },
 }
 
@@ -819,5 +931,41 @@ TASK_TEMPLATES = [
         if ch in vowels:
             count += 1
     return count
+'''),
+    # Aggiunti 2026-09-21 per l'holdout fresco del punto 12 -- vedi il
+    # commento su BUG_PATTERNS sopra. Novel come variable_shadowing/
+    # incorrect_sort_key_or_order/wrong_return_in_loop: nessun Book, quindi
+    # NOVEL indipendentemente dal valore di role qui sotto
+    # (task_generator.py assegna NOVEL a qualunque pattern senza Book).
+    ("wrong_exception_type_caught", "safe_divide", "novel_a", '''def safe_divide(a, b):
+    try:
+        return a / b
+    except TypeError:
+        return None
+'''),
+    ("recursive_missing_base_case", "sum_to_n", "novel_a", '''def sum_to_n(n):
+    if n == 1:
+        return 1
+    return n + sum_to_n(n - 1)
+'''),
+    ("wrong_exception_type_caught", "parse_int_or_none", "novel_b", '''def parse_int_or_none(s):
+    try:
+        return int(s)
+    except TypeError:
+        return None
+'''),
+    ("recursive_missing_base_case", "sum_to_n", "novel_b", '''def sum_to_n(n):
+    return n + sum_to_n(n - 1)
+'''),
+    ("wrong_exception_type_caught", "first_or_default", "novel_c", '''def first_or_default(items, default):
+    try:
+        return items[0]
+    except KeyError:
+        return default
+'''),
+    ("recursive_missing_base_case", "fibonacci", "novel_c", '''def fibonacci(n):
+    if n == 1:
+        return 1
+    return fibonacci(n - 1) + fibonacci(n - 2)
 '''),
 ]

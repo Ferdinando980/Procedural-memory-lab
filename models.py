@@ -33,6 +33,10 @@ class Book:
     supersedes: str | None = None
     superseded_by: str | None = None
     generation_method: str = "manual"  # manual | compression | skill_generator
+    # Optional compiled decision rule for architectural tools such as the
+    # Detective. Each entry has trigger/action/fallback. Legacy Books may
+    # omit it and fall back to text extraction.
+    decision_table: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -60,3 +64,16 @@ class SkillPackage:
         for book in self.books:
             sections.append(f"### {book.title}\n{book.procedure_text.strip()}")
         return "\n\n".join(sections)
+
+
+@dataclass(frozen=True)
+class FailureRecord:
+    """Structured evidence emitted only after executable verification fails."""
+
+    task_id: str
+    phase: str
+    status: str
+    failed_source: str
+    verifier_feedback: str
+    tests_passed: int | None = None
+    tests_total: int | None = None

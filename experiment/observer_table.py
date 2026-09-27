@@ -118,15 +118,18 @@ def build_quest_scores(experiment_id: str) -> list[dict]:
     """One row per quest_id, matching the QUEST SCORE mockup. Base fields come
     straight from log.jsonl (already one row per quest); npc_calls is the only
     value not already sitting on the LogRecord, so it's counted for real from
-    MODEL_CALL_FINISHED events instead of assumed to be 1."""
+    all model-bearing events instead of assumed to be 1."""
     records = read_all(experiment_id)
     events = read_events(experiment_id)
 
     npc_calls: dict[str, int] = {}
     for e in events:
-        if e["event_type"] == "MODEL_CALL_FINISHED":
+        if e["event_type"] in {"MODEL_CALL_FINISHED", "RECOVERY_MODEL_CALL_FINISHED"}:
             qid = e["quest_id"]
             npc_calls[qid] = npc_calls.get(qid, 0) + 1
+        elif e["event_type"] == "DETECTIVE_RESULT":
+            qid = e["quest_id"]
+            npc_calls[qid] = npc_calls.get(qid, 0) + int(e["data"].get("model_calls", 0) or 0)
 
     rows = []
     for r in records:

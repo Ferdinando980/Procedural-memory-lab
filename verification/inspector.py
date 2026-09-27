@@ -152,6 +152,27 @@ def judge_skill_package_conflicts(reports: list[ConflictReport]) -> InspectorVer
     return InspectorVerdict(status="SOLID", reason="nessun conflitto reale rilevato tra le skill del package", responsible="", feedback_for_regeneration="")
 
 
+def judge_online_recovery(
+    *, failure_recorded: bool, recovery_passed: bool, detective_diagnosed: bool,
+) -> InspectorVerdict:
+    """Audit one online recovery using facts already produced by other tools."""
+    if not failure_recorded:
+        return InspectorVerdict(
+            "INCONCLUSIVE", "recovery priva di un fallimento verificato",
+            "verifier", "registrare prima l'esito eseguibile del Verifier",
+        )
+    if recovery_passed:
+        return InspectorVerdict(
+            "SOLID", "la recovery supera il Verifier", "", "",
+        )
+    return InspectorVerdict(
+        "INCONSISTENT",
+        "la recovery non supera il Verifier" + (" nonostante una diagnosi disponibile" if detective_diagnosed else " e la diagnosi è inconcludente"),
+        "worker_recovery" if detective_diagnosed else "detective_or_worker_recovery",
+        "usare il nuovo feedback eseguibile in una futura traiettoria; non riprovare nella quest corrente",
+    )
+
+
 def _attempts_log_path(experiment_id: str) -> Path:
     return config.experiment_dir(experiment_id) / "inspector_attempts.jsonl"
 
