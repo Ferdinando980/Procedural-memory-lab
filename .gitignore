@@ -8,7 +8,5 @@ __pycache__/
 *.pem
 credentials.json
 Secrets/
-graphify-out/
 logs/*
-!logs/.gitkeep
 library/_repair_scratch/
