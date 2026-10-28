@@ -23,6 +23,10 @@ Il banco di prova è piccolo di proposito: funzioni Python con bug reali, contro
 
 Confrontando F con B vedo se il recupero aiuta. Confrontando F con C capisco perché: se la procedura si generalizza, F deve reggere dove una risposta copiata non basterebbe.
 
+## Come si giudica un run
+
+Ogni compito è etichettato `KNOWN`, `VARIANT` o `NOVEL`, in base a quanto è vicino a qualcosa che la libreria contiene già. Così vedo se un miglioramento regge su casi per cui la procedura non era stata scritta. Per ogni tentativo conservo copertura del recupero, costo, latenza, token e verdetto di `pytest`, e i report si costruiscono da questi dati, non a memoria.
+
 ## Cosa ho trovato
 
 Nei primi cinque run completi la Skill Library è finita avanti rispetto al modello piccolo ogni volta, con 7,8 punti di accuratezza in più su 116 tentativi. È un risultato incoraggiante e nient'altro. I run non sono repliche pulite, la libreria è cambiata lungo la strada e il vantaggio è disomogeneo tra le skill. Nel run iniziale più grande solo due dei dieci pattern coperti hanno portato un beneficio.

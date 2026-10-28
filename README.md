@@ -23,6 +23,10 @@ The test bed is small on purpose: Python functions with real bugs, checked by `p
 
 F against B tells me if retrieval helps. F against C tells me why: if the procedure generalises, F should hold up where a copied answer would not.
 
+## How a run is judged
+
+Each task is labelled `KNOWN`, `VARIANT` or `NOVEL`, depending on how close it is to something the library already holds. That way I can see whether a gain survives on cases the procedure was not written for. For every attempt I keep the retrieval coverage, cost, latency, token use and the `pytest` verdict, and the reports are built from those records, not from memory.
+
 ## What I found
 
 In the first five complete runs the Skill Library finished ahead of the small baseline every time, with 7.8 points more accuracy over 116 attempts. That is encouraging and nothing more. The runs are not clean replications, the library changed along the way, and the gain is uneven between skills. In the biggest early run only two of ten covered patterns paid off.
