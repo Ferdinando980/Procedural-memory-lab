@@ -8,180 +8,423 @@
 
 <p align="center"><sub>Una quest rigiocata in Cognitive City, la pagina che trasforma un run concluso in una piccola città. I quattro agenti (NPC-A, B, C ed F) ricevono lo stesso bug a <i>Casa</i>. C ed F passano prima dalla <i>Biblioteca</i> per consultare qualcosa (<i>Sto imparando!</i>). Poi tutti scrivono una soluzione al <i>Negozio</i> e fanno i test all'<i>Ospedale</i>, prima di tornare a casa con <i>Missione riuscita</i>.</sub></p>
 
+## In breve
+
+- **La domanda.** Un modello economico migliora perché ha una procedura generale, o solo perché ha già visto una soluzione simile?
+- **Il risultato di riferimento** (una run pulita, 39 compiti). Il modello piccolo da solo ne risolve 36, con una procedura 38, con la soluzione di un caso simile 38, e gli ultimi due hanno risolto gli stessi compiti. Sono tre fallimenti recuperati: una direzione, non un effetto statisticamente significativo.
+- **Ragiona o copia?** Cambiando una costante dentro la procedura, la risposta del modello la seguiva 12 volte su 12. Chiedendo di derivare il valore, il modello ha calcolato tolleranze su sette ordini di grandezza.
+- **Serve sempre?** In 27 dei 31 compiti in cui il modello piccolo riceveva una procedura, li avrebbe risolti comunque.
+
 ## La domanda
 
-Un modello economico può avvicinarsi a uno costoso e potente su un compito reale, se può leggere conoscenza scritta in precedenza? E soprattutto: quella conoscenza deve essere una procedura generale, o basta avergli già mostrato una soluzione simile?
+Un modello economico può avvicinarsi a uno più potente se gli permettiamo di recuperare conoscenza scritta in precedenza?
 
-La seconda domanda è quella difficile. Un sistema che sembra imparare potrebbe soltanto recuperare risposte già viste. Copia e non generalizza, e le due cose non si distinguono contando quanti problemi risolve. La differenza va isolata di proposito, con un esperimento pensato per renderla visibile.
+E soprattutto: **deve essere una procedura generale, oppure basta mostrargli la soluzione di un problema simile?**
 
-Il vocabolario del codice (Quest, Book, NPC, Librarian) è preso in prestito da un gioco di ruolo. È solo un'etichetta comoda per idee standard: recupero, memoria procedurale e instradamento tra modelli.
+La seconda domanda è quella che mi interessava davvero.
 
-## Il banco di prova: un bug, quattro modi di affrontarlo
+Un sistema che sembra imparare potrebbe semplicemente ricordare una risposta. Magari risolve più problemi, costa meno e sembra anche ragionare meglio. Ma quale parte del miglioramento viene dalla conoscenza che gli abbiamo dato? E quella conoscenza gli ha insegnato un metodo, oppure gli ha fornito qualcosa da copiare?
 
-Ogni compito, una quest, è una funzione Python con un bug reale. Il verdetto non è mai un'opinione. Eseguo `pytest` in un sottoprocesso separato, così un modello linguistico non giudica mai un altro modello linguistico e il verificatore non può coincidere con ciò che viene verificato.
+Contare i successi non basta per distinguere le due possibilità.
 
-Lo stesso bug va a quattro agenti con lo stesso identico prompt di base.
+Ho costruito Procedural Memory Lab per provare a separarle, con esperimenti controllati, un verificatore automatico e un confronto che spesso manca quando si parla di Skills: quello con una soluzione precedente già pronta.
 
-| Config | Chi risolve | Cosa riceve in più | Cosa dovrebbe mostrare |
-|---|---|---|---|
-| **A, Expert** | modello grande e costoso | niente | quanto costerebbe farlo bene ogni volta |
-| **B, Small** | modello economico | niente | quanto vale il modello nudo, la vera base di confronto |
-| **F, Small + Skill Library** | modello economico | una procedura scritta dopo un tentativo precedente: generale, non legata a un caso | se una procedura riusabile aiuta |
-| **C, Small + Solution Bank** | modello economico | la soluzione corretta di un problema simile già visto: un esempio, non una regola | se basta aver già visto un caso simile |
+Nel tempo, però, il laboratorio ha iniziato a rispondere anche ad altre domande.
 
-C è il pezzo che manca in gran parte dei discorsi sulle librerie di skill. Se F batte B è facile dire che la libreria insegna qualcosa di generale. Ma se anche C batte B di una quantità simile, quel guadagno potrebbe non c'entrare con una procedura: basterebbe aver visto un caso simile. Confrontare F con C, e non solo con B, è l'unico modo per distinguere le due storie.
+**Quando una procedura è davvero utile? Quando è soltanto un costo? Può persino peggiorare un modello che senza aiuti avrebbe risolto il problema? E come faccio a sapere se il mio test sta misurando la cosa giusta?**
 
-Un dettaglio onesto. La soluzione data a C è la funzione di riferimento del catalogo dei bug, non una vera trascrizione scritta da Expert. È un sostituto ragionevole, perché Expert di solito risolve dal 95 al 100 per cento dei casi, ma non è la stessa cosa e lo dichiaro qui.
+Sono domande nate dai risultati, compresi quelli che non mi aspettavo.
 
-## Come si giudica un run
+Il progetto usa un vocabolario preso dai giochi di ruolo: Quest, Book, NPC, Librarian. I nomi sono una scelta narrativa; sotto ci sono normali problemi di memoria procedurale, recupero della conoscenza, valutazione e instradamento tra modelli.
 
-Ogni bug appartiene a uno split:
+## Un bug, quattro modi di affrontarlo
 
-- **KNOWN** è l'esempio canonico di un pattern di bug già coperto da una skill o da una soluzione.
-- **VARIANT** è lo stesso pattern con un problema diverso, e verifica la generalizzazione.
-- **NOVEL** è un pattern mai coperto, di proposito. Per tre pattern non scrivo mai né una skill né una soluzione, così esiste sempre un gruppo di controllo permanente.
+Ogni Quest è una funzione Python con un bug introdotto nel catalogo sperimentale.
 
-Ogni recupero, per F e per C, registra anche la sua copertura: `NONE` se non è stato trovato nulla di pertinente, `FULL` per una corrispondenza esatta, `PARTIAL` per C quando la soluzione riguarda un problema diverso della stessa famiglia.
+La stessa richiesta viene affidata a quattro configurazioni. Cambia il modello, oppure la conoscenza aggiuntiva che può consultare.
 
-Tengo separate le due cose perché rispondono a domande diverse. Se F senza nulla di trovato si comporta come B, ma F con una corrispondenza esatta fa meglio, allora è il contenuto recuperato a spostare il risultato e non la semplice presenza di un meccanismo di recupero. Ne escono due numeri:
+| Configurazione | Chi risolve | Cosa riceve |
+|---|---|---|
+| **A — Expert** | Modello più potente | Nessun aiuto |
+| **B — Small** | Modello economico | Nessun aiuto |
+| **F — Skill Library** | Stesso modello economico | Una procedura generale recuperata dalla libreria |
+| **C — Solution Bank** | Stesso modello economico | La soluzione corretta di un problema simile |
 
-- **Delta Retrieval** è l'accuratezza con copertura `FULL` meno quella con `NONE`, dentro la stessa config. Dice quanto conta trovare qualcosa.
-- **Delta Architecture** è l'accuratezza della config con copertura `FULL` meno quella di B. Dice quanto l'intera architettura supera il modello nudo quando il recupero funziona davvero.
+B è il punto di partenza: cosa sa fare il modello da solo?
 
-Per ogni tentativo conservo anche costo, latenza, uso di token e verdetto di `pytest`, e i report si costruiscono da questi dati e non a memoria.
+F verifica se una procedura scritta in precedenza può aiutarlo.
 
-## Recitazione o derivazione: il controllo causale
+C pone il dubbio più importante: **e se il vantaggio di F non dipendesse affatto dall'avere una procedura?**
 
-Il risultato più interessante finora non è un numero di accuratezza. È un modo di non farsi ingannare da una correlazione.
+Se F supera B, sappiamo che qualcosa è migliorato. Ma se C ottiene lo stesso risultato, non possiamo attribuire quel miglioramento alla generalizzazione procedurale.
 
-Studiando la skill `floating_point_equality`, che insegna a scegliere una tolleranza (un epsilon) invece di confrontare numeri decimali per uguaglianza esatta, mi è venuto un sospetto. Su un compito senza indizi numerici, F rispondeva sempre `1e-9`. O il modello ragionava sulla scala del problema, oppure ripeteva meccanicamente una costante scritta nella skill. Guardare la correlazione non basta a distinguere le due ipotesi, quindi ho fatto un test causale: ho cambiato direttamente la costante nella skill (`1e-9`, poi `2.5e-6`, poi `7e-4`) e ho controllato se la risposta si muoveva con essa.
+Il confronto F contro C serve proprio a mettere in difficoltà questa interpretazione.
 
-- È successo 12 volte su 12, su due compiti scollegati.
-- Cambiare invece una costante di una sezione diversa della skill, quella sulla valuta, non ha avuto alcun effetto, 6 volte su 6, e nemmeno il cambiamento inverso.
+C'è una limitazione da dichiarare: la soluzione fornita a C è la funzione di riferimento del catalogo, non una risposta realmente prodotta da Expert in un'esecuzione precedente. È un proxy utile, ma non coincide perfettamente con una memoria di esperienze reali.
 
-Quindi il modello sceglieva la regola giusta e poi copiava un numero preso da essa. Non derivava l'epsilon dalla scala del problema. È una sostituzione letterale di uno slot preciso, non una vaga abitudine di citare esempi.
+### Come verifico le risposte?
 
-Avrebbe potuto chiudersi lì, ma ho riscritto la skill chiedendo una derivazione invece di una costante fissa, e il modello ha iniziato a derivare. Ha seguito la grandezza del problema su sette ordini di grandezza, con un solo piccolo errore aritmetico. Il collo di bottiglia non era una capacità mancante del modello. Era il contenuto dell'istruzione.
+Non chiedo a un altro modello linguistico di decidere se il codice è corretto.
 
-Una conferma pulita è arrivata su un dominio davvero diverso, le cifre significative in un confronto decimale. Lì il modello ha prodotto due epsilon diversi nello stesso test, ciascuno corretto per la propria struttura decimale. Una sostituzione meccanica non può produrre due numeri diversi entrambi corretti, solo una vera derivazione può.
+La soluzione viene eseguita attraverso `pytest`, in un sottoprocesso separato, e riceve un esito verificabile.
 
-Il test sta in `experiment/canary.py`. Usa compiti sintetici che né l'ottimizzatore né il generatore di skill hanno mai visto, perché altrimenti la skill verrebbe scritta per superare il test, cioè l'opposto di misurarlo. Una versione leggibile delle risposte del modello, trascritte a mano e non rigenerate, è stata conservata come piccola pagina.
+Questo evita di affidare il giudizio alla preferenza di un altro LLM. Non rende però infallibile il verificatore: anche i test possono essere incompleti o sbagliati. Durante la ricerca ho trovato esempi concreti proprio di questo problema.
+
+I task sono inoltre divisi in tre gruppi:
+
+- **KNOWN:** il caso canonico di un pattern già coperto.
+- **VARIANT:** lo stesso tipo di errore, ma in un problema differente.
+- **NOVEL:** un pattern mai coperto dalla libreria, usato come controllo.
+
+Per alcuni pattern NOVEL non viene mai creata una Skill né inserita una soluzione precedente.
+
+Quando il Librarian recupera qualcosa, registro anche la copertura: `NONE`, `FULL` oppure `PARTIAL`, quest'ultima usata per le corrispondenze parziali della Solution Bank.
+
+Non voglio soltanto sapere se F ha vinto. Voglio sapere **che cosa gli è stato effettivamente fornito quando ha vinto**.
+
+## Le procedure funzionano davvero?
+
+La run di riferimento è `experiment4`: 39 compiti, quattro configurazioni e 156 tentativi.
+
+È stata eseguita in un'unica sessione, con un solo provider e un modello per configurazione: `gemini-3.7-flash` per Expert e `gemini-3.1-flash-lite` per Small.
+
+| Configurazione | Risolti | Accuratezza |
+|---|---:|---:|
+| A — Expert | 38/39 | 97,4% |
+| B — Small | 36/39 | 92,3% |
+| F — Skill Library | 38/39 | 97,4% |
+| C — Solution Bank | 38/39 | 97,4% |
+
+A prima vista il risultato sembra semplice.
+
+Il modello piccolo, con una procedura, raggiunge Expert. Ma anche quello con una soluzione precedente raggiunge Expert.
+
+Ecco il problema: **F e C hanno risolto esattamente gli stessi compiti**.
+
+Questa run non dimostra che una procedura generale sia migliore di un esempio concreto.
+
+F ha guadagnato tre vittorie rispetto a B, perdendo però un compito sul quale è stato individuato un test difettoso. Escludendo quel caso, il confronto è di tre vittorie a zero su 38 task. Il test esatto di McNemar restituisce `p = 0,25`.
+
+È una direzione interessante, non una differenza statisticamente significativa.
+
+Non voglio trasformare tre problemi risolti in una conclusione molto più grande di quello che i dati permettono.
+
+### E le run precedenti?
+
+Prima di `experiment4` ci sono altre run numerate. Non le uso per nessun risultato: in alcune il provider o il modello cambiavano a metà esecuzione, una usava un Expert diverso, un'altra aveva soltanto quattro compiti. Le ho archiviate come log. Servono a ricostruire la storia della ricerca, non a sostenere una conclusione.
+
+Il primissimo run, ancora precedente, non mostrava benefici.
+
+Per un periodo quella conclusione era rimasta scritta anche dopo nuovi risultati. Non l'ho eliminata dalla storia: semplicemente non era più sufficiente a descrivere il progetto.
+
+Per questo oggi tengo separati il risultato di riferimento, le osservazioni esplorative e le verifiche successive.
+
+## Il modello sta ragionando o sta copiando?
+
+Questa è probabilmente la scoperta che mi ha fatto cambiare di più il modo di pensare alle procedure.
+
+Stavo studiando `floating_point_equality`, una Skill che insegna a evitare confronti esatti tra numeri decimali usando una tolleranza, chiamata epsilon.
+
+Su un compito senza indicazioni numeriche, il modello rispondeva sempre con:
+
+`1e-9`
+
+Ma perché proprio quel numero?
+
+Poteva aver dedotto che fosse appropriato. Oppure poteva semplicemente averlo letto nella Skill e ripetuto.
+
+Ho deciso di modificare direttamente la costante nella procedura.
+
+Prima `1e-9`, poi `2.5e-6`, poi `7e-4`.
+
+**La risposta del modello ha seguito il cambiamento 12 volte su 12**, su due compiti scollegati.
+
+Ho modificato anche una costante in una sezione non pertinente della Skill, dedicata alla valuta. In quel caso non è cambiato nulla, 6 volte su 6.
+
+Il modello non stava copiando un numero qualsiasi. Stava selezionando la sezione pertinente e prendendo il valore che trovava lì.
+
+Poi ho fatto una seconda prova.
+
+Invece di fornire una costante fissa, ho riscritto la procedura chiedendo di derivare la tolleranza dalla scala del problema.
+
+Il comportamento è cambiato. Il modello ha iniziato a produrre valori dipendenti dal problema, attraversando sette ordini di grandezza con un solo errore aritmetico osservato.
+
+In un caso sulle cifre significative ha persino prodotto due epsilon differenti nello stesso test, entrambi corretti per la rispettiva struttura decimale.
+
+Questo non permette di osservare direttamente i processi interni del modello. Permette però di distinguere due comportamenti: ripetere un valore prescritto e calcolare valori diversi in funzione degli input.
+
+**Il modello era capace di produrre la soluzione richiesta. La prima istruzione lo stava guidando verso un comportamento più rigido.**
+
+Il controllo è implementato in `experiment/canary.py`, con compiti sintetici non utilizzati per costruire o ottimizzare le Skills. Una versione leggibile delle risposte del modello, trascritte a mano e non rigenerate, è stata conservata in una piccola pagina.
 
 <p align="center"><img src="docs/images/epsilon-lab.png" width="760" alt="Il controllo sulla tolleranza, vista della pagina"></p>
 
-## Cosa mostra la run di riferimento
+## E se una Skill peggiorasse il risultato?
 
-Tutti i risultati qui sotto vengono da una sola run pulita, `experiment4`: 39 compiti, quattro config, 156 tentativi, un solo provider e un solo modello per config (Expert `gemini-3.7-flash`, Small `gemini-3.1-flash-lite`), eseguita in un'unica sessione. Le run precedenti non le uso più per nessun risultato. A metà cambiavano provider o modello, usavano un Expert diverso o avevano solo quattro compiti. Sono archiviate come log.
+Qui la ricerca ha preso una direzione che non avevo previsto.
 
-| Config | Risolti | Accuratezza | Intervallo al 95% |
-|---|---|---|---|
-| A, Expert | 38 / 39 | 97,4% | da 86,8 a 99,5 |
-| B, Small | 36 / 39 | 92,3% | da 79,7 a 97,3 |
-| F, Small + Skill Library | 38 / 39 | 97,4% | da 86,8 a 99,5 |
-| C, Small + Solution Bank | 38 / 39 | 97,4% | da 86,8 a 99,5 |
+L'idea di avere una regola generale sempre disponibile sembra ragionevole. Se una procedura è utile, perché non mostrarla al modello anche prima che ne abbia bisogno?
 
-| Split (compiti) | A | B | F | C |
-|---|---|---|---|---|
-| KNOWN (10) | 9 | 8 | 10 | 10 |
-| VARIANT (21) | 21 | 20 | 20 | 20 |
-| NOVEL (8) | 8 | 8 | 8 | 8 |
+Ho verificato cosa accadeva con una Skill generica sempre attiva. È un'osservazione esplorativa, fatta con un modello locale (Gemma) e fuori dalla run di riferimento.
 
-**Lettura delle differenze appaiate.** F ha battuto B su tre compiti e ha perso su uno. Le vittorie sono due compiti `wrong_string_case_comparison` e uno `floating_point_equality`, tutti con la skill trovata in modo esatto. La sconfitta è `floating_point_equality__temperature_reached__variant`, un compito la cui suite di test so essere difettosa: non verifica mai il caso che dovrebbe testare, quindi B "passa" senza scrivere alcun epsilon. Escludendo quel compito, F ne risolve 38 su 38 contro 35 su 38 di B, tre vittorie a zero, e un test di McNemar esatto dà p = 0,25. È una direzione, non un effetto significativo. F e C hanno risolto esattamente gli stessi compiti, quindi questa run non permette di distinguere una procedura riusabile da una soluzione simile già pronta, ed Expert è già vicino al massimo, il che lascia poco spazio per mostrare qualcosa.
+Sugli stessi 33 task:
 
-**Dove sta il beneficio.** Una skill è stata iniettata in 31 dei 39 tentativi di F. In 27 di questi (87,1% secondo il conteggio del progetto, 28 se si conta il compito difettoso) B risolveva comunque il compito, quindi quelle iniezioni sono costate token senza cambiare nulla. Tre sono stati vantaggi reali. Il Delta Retrieval di F è meno 3,2 punti, ed è esattamente zero escludendo il compito difettoso. Quello di C è zero. Solo due dei dieci pattern coperti, `floating_point_equality` e `wrong_string_case_comparison`, mostrano un beneficio misurato in questa run.
+| Condizione | Successi |
+|---|---:|
+| Senza Skill generica | 28/33 — 84,8% |
+| Con Skill generica | 21/33 — 63,6% |
 
-**Costo.** La run è sequenziale, quindi token e latenza sono confrontabili. F paga in media 145 token di input in più di B (da 0 a 480) per usare una skill già pronta. Per compito: A 593 token, in gran parte ragionamento nascosto, B 221, C 308, F 370. Latenza media: A 13,8 s, B 0,93 s, C 0,88 s, F 0,96 s. Non riporto denaro, perché in questa run le variabili di prezzo non erano impostate e ogni costo risulta zero. Costruire le skill è un costo a parte. Il registro eventi della run segna 18 compressioni e 66 riverifiche, 35.269 token, circa 1.959 per skill. I costi di costruzione per pattern nel report economico, fino a circa 37.000 token, accumulano quanto la libreria condivisa è costata in tutte le run precedenti. Con da due a quattro compiti per pattern, un pattern su dieci è economicamente positivo (pareggio intorno a 13 usi), uno è positivo solo sull'accuratezza e otto sono negativi. Negativo non significa buttare la skill, perché con numeri così piccoli può avere un valore che le due metriche non catturano.
+In una verifica successiva, dopo aver rimosso quella Skill, i successi sono tornati a 29/33.
 
-**Un secondo riferimento.** `experiment_totale_2026_09_18` fa girare gli stessi 39 compiti con lo stesso modello Small, ma con un Expert diverso (`gemini-3.6-flash`), in parallelo e con una politica di recupero che salta gli otto pattern in cui una skill non aveva mostrato benefici nelle run precedenti. Solo 6 tentativi di F ricevono una skill invece di 31, con una mediana di 149 token di input contro 257, eppure B, C e F risolvono esattamente gli stessi compiti di `experiment4`, comprese le tre vittorie di F, che stanno tutte nei sei compiti che ricevono ancora una skill. Non è una replica indipendente, perché la decodifica è quasi deterministica: la lunghezza dell'output di B è identica su 38 compiti su 39. Mostra invece che le 25 iniezioni eliminate non hanno avuto effetto sugli esiti. Lo uso per B, C e F, non per Expert e non per la latenza.
+È una sola esecuzione per condizione. Ripetendo la stessa condizione ho visto oscillazioni di uno o due task: la differenza di sette è più ampia, ma una prova come questa non basta a dire quanto sia robusta.
 
-**Cosa non si può dire.** I compiti sono 39 bug Python di una sola funzione scritti per questo progetto, una sola esecuzione per cella, su una sola famiglia di modelli. Non separa una procedura da una soluzione simile già pronta, non mostra che il beneficio regga con un altro modello Small o in un altro dominio, e la differenza tra F e B è di tre compiti. I log completi delle run non fanno parte di questo repository pubblico, quindi questi numeri sono una mia lettura di `experiment4`, ricalcolata dal suo `log.jsonl`.
+Il danno è osservabile. La sua causa precisa, invece, non è stata isolata.
+
+Una possibile spiegazione è che l'istruzione inducesse il modello a cercare problemi nascosti anche dove non esistevano. Ma non ho separato sperimentalmente gli effetti della lunghezza, della formulazione, della struttura e dell'attivazione indiscriminata.
+
+Quindi non posso dire che tutte le regole globali siano dannose.
+
+Posso dire qualcosa di più circoscritto, ma utile: **in una prova esplorativa, una procedura apparentemente ragionevole ha peggiorato compiti che il modello sapeva già risolvere**.
+
+Questo cambia la domanda da porre prima di aggiungere una nuova Skill.
+
+Non soltanto: «Potrebbe essere utile?»
+
+Anche: «Cosa succede ai problemi che il modello risolveva già senza di essa?»
+
+## Serve davvero recuperare una procedura ogni volta?
+
+Un altro risultato mi ha colpito per il motivo opposto.
+
+Nella run di riferimento, in 27 dei 31 compiti in cui F riceveva una Skill, il modello B risolveva comunque il compito senza aiuti (28 se si conta anche il compito difettoso).
+
+In molti casi, quindi, il recupero aggiungeva testo al prompt senza cambiare l'esito.
+
+Non è automaticamente inutile. Potrebbe avere effetti non catturati dalla sola accuratezza. Ma quei token vengono comunque consumati.
+
+Ho provato anche una politica che evitava di recuperare le procedure appartenenti a otto pattern risultati poco utili nelle run precedenti.
+
+Nel secondo riferimento, `experiment_totale_2026_09_18`, le iniezioni passano da 31 a 6, mentre B, C e F risolvono gli stessi task del run di riferimento. Lì cambiano anche l'Expert e il modo di esecuzione, in parallelo, quindi lo uso solo per B, C e F.
+
+Non considero questa una replica indipendente: utilizza gli stessi compiti e un comportamento di decodifica quasi deterministico. Mostra però che, in quel confronto, le 25 iniezioni eliminate non modificavano gli esiti.
+
+A quel punto nasce una nuova domanda.
+
+**Forse il problema non è soltanto trovare la procedura giusta. È capire quando il modello non ha bisogno di nessuna procedura.**
+
+Il Librarian recupera per sovrapposizione di tag. Il fatto che una procedura sia pertinente al problema non dimostra che sia anche necessaria.
+
+Pertinenza e utilità sono due cose diverse.
+
+## Quanto costa insegnare qualcosa che il modello sa già fare?
+
+Una Skill non è gratuita, neppure quando esiste già.
+
+In `experiment4`, F consuma mediamente 145 token di input in più di B per utilizzare la libreria.
+
+Il consumo medio complessivo registrato per tentativo è:
+
+| Configurazione | Token medi |
+|---|---:|
+| A — Expert | 593 |
+| B — Small | 221 |
+| C — Solution Bank | 308 |
+| F — Skill Library | 370 |
+
+Per A la maggior parte dei token è ragionamento nascosto del modello, che il registro conta a parte ma che qui è incluso.
+
+Anche costruire una Skill ha un costo.
+
+Nel registro della run, 18 compressioni e 66 riverifiche hanno consumato complessivamente 35.269 token, circa 1.959 per Skill nel conteggio utilizzato.
+
+E questo senza contare tutto il costo storico accumulato durante la ricerca.
+
+Nel rapporto economico del run più completo, su dieci pattern coperti, uno è classificato economicamente positivo, uno positivo sull'accuratezza e otto negativi secondo i criteri adottati.
+
+Non significa che otto procedure siano prive di valore. I campioni per pattern sono piccoli, e una procedura potrebbe diventare conveniente dopo più utilizzi.
+
+Significa che **avere una libreria di conoscenze non è automaticamente più economico che risolvere direttamente il problema**.
+
+Per questo il progetto considera il punto di pareggio, il costo di costruzione, il costo per utilizzo e il risultato ottenuto.
+
+Nella run di riferimento non riporto costi monetari affidabili: le variabili di prezzo non erano configurate e i valori registrati risultano zero. Token e latenza, invece, sono disponibili.
+
+## E se il verificatore fosse quello che sbaglia?
+
+C'è una cosa che non mi piace dei benchmark: quanto sia facile fidarsi di un numero soltanto perché è prodotto da un programma.
+
+All'inizio avevo scelto `pytest` proprio per evitare giudizi soggettivi tra modelli.
+
+È stata una scelta utile, ma non sufficiente.
+
+Durante la ricerca sono stati individuati sei bug nell'infrastruttura di verifica e due task difettosi.
+
+In un caso il test non controllava realmente il comportamento per cui era stato scritto: `temperature_reached`, quello che compare anche nella run di riferimento. In un altro, il difetto vero non era quello dichiarato: una chiamata `.upper()` incidentale nel corpo del ciclo faceva fallire il compito, e correggere soltanto il problema indicato non bastava a farlo passare.
+
+Un modello poteva quindi ricevere un successo senza aver risolto il problema che intendevo misurare, o un fallimento per un motivo diverso da quello che intendevo misurare.
+
+La conseguenza è semplice: **un verificatore deterministico può restituire un risultato ripetibile e comunque sbagliato**.
+
+C'è anche il problema dell'adattamento ai test.
+
+In una prova esplorativa della serie di settembre, un risultato storico di 195 successi su 195, ottenuto con suite di test che avevano fatto da oracolo durante la ricerca, non si è mantenuto su un piccolo insieme di sei casi freschi: ne sono stati superati quattro.
+
+Sei casi non bastano per stimare una nuova accuratezza generale, e non sono direttamente comparabili con tutto il campione storico. Bastano però per mostrare che un risultato perfetto sui casi utilizzati durante lo sviluppo può essere fragile.
+
+Oggi, quando una prova sembra troppo convincente, cerco prima di capire **che cosa potrebbe renderla ingannevole**.
+
+## Sapere che problema è significa sapere come risolverlo?
+
+Non sempre.
+
+Ho eseguito anche piccole prove esplorative per separare il riconoscimento del problema dalla procedura proposta per risolverlo.
+
+In alcuni casi la diagnosi bastava a sbloccare il modello.
+
+In altri, aggiungere una procedura completa non migliorava il risultato o lo peggiorava. Una procedura-placebo, priva di contenuto utile, ha persino portato un caso `flatten_list` da tre successi su tre a zero su tre.
+
+Sono campioni minuscoli: tre ripetizioni su uno o due task per pattern. Non permettono conclusioni generali.
+
+Ma indicano una distinzione che vale la pena conservare.
+
+Un modello può fallire perché non riconosce il problema. Oppure può riconoscerlo correttamente e non sapere come intervenire. Oppure può sapere già come intervenire, ma essere deviato da istruzioni aggiuntive.
+
+Questi tre errori non richiedono necessariamente lo stesso tipo di conoscenza.
 
 ## Dall'esperimento controllato all'uso reale
 
-Le stesse idee sono state poi portate a mano in Aria, un'app di studio che ho costruito per un utente reale con ADHD. Non è un prodotto in vendita. È il secondo terreno di prova della stessa domanda, con dati di comportamento reali invece di compiti sintetici. I due progetti restano separati di proposito, e tra loro non si condivide nulla a livello di codice.
+Ho portato alcune idee del laboratorio anche in Aria, un'app di studio costruita per un utente reale con ADHD.
 
-Passare da un contesto sintetico a una persona vera ha cambiato alcune scelte.
+Non è un prodotto in vendita, e i due progetti rimangono separati a livello di codice.
 
-- Le skill non vengono più generate in automatico dalle conversazioni. Una skill esiste solo quando qualcuno la crea di proposito.
-- Il testo scritto dall'utente non viene mai riscritto in silenzio. L'unico accorciamento ammesso si può annullare, e viene tenuto solo se un secondo controllo indipendente conferma che obiettivo e criterio di riuscita restano intatti.
-- Non ogni istruzione è una procedura. Solo un metodo, con un risultato atteso e un criterio di riuscita, può essere giudicato giusto o sbagliato da un esito. Una preferenza o una regola vincolante non è giusta o sbagliata in quel senso.
+L'uso reale ha imposto criteri diversi.
 
-L'uso reale cambia anche il modo di misurare. Nell'esperimento posso forzare metà dei casi su F e metà su B. Nell'app è il sistema a decidere da solo quando una skill è pertinente, e questo introduce un bias nel campione, quindi le prove sono di due livelli di forza. Confrontare gruppi sull'uso ordinario è debole per costruzione, perché le richieste che attivano una skill tendono a essere più facili delle altre. La versione forte è un confronto appaiato alla cieca: la stessa richiesta reale risposta due volte, una con le skill e una senza, e giudicata senza sapere quale sia quale.
+Le Skills non vengono generate automaticamente dalle conversazioni. Una procedura nasce da una scelta esplicita. Il testo scritto dall'utente non viene riscritto in silenzio. Gli accorciamenti devono essere reversibili e controllati.
 
-Cosa è emerso finora, con i suoi limiti.
+Soprattutto, ho dovuto distinguere tra una procedura verificabile, una preferenza personale e una regola vincolante.
 
-- Il controllo causale descritto sopra è stato riusato su otto meccanismi di autoverifica che controllano l'output del modello indipendentemente da ciò che il modello ne dice. Ognuno è stato validato su un caso noto più una manipolazione diretta prima di entrare in uso. Restano tutti candidati: verificati una volta, ma non ancora osservati abbastanza a lungo nell'uso reale.
-- Preliminare e fuori dalle run di riferimento: su un modello Gemma locale ho confrontato un meccanismo di recupero del comportamento con il solo prompt nudo su 22 coppie confrontabili, giudicate dagli stessi validator usati in produzione. Il risultato è stato 17 su 22 (77%) contro 13 su 22 (59%). Quasi tutto il vantaggio sta in un dominio, l'onestà sui materiali (6 su 9 contro 2 su 9). Sulla scomposizione dei compiti e sulle spiegazioni per principianti i due approcci sono più o meno pari. È un solo run per cella, senza ripetizioni, quindi la direzione è coerente con questo progetto ma il numero esatto non è conclusivo.
-- Un risultato di qui è diventato una regola di prodotto. Quando si scrive una skill, vanno nominati esplicitamente i casi scomodi invece di fidarsi che il modello generalizzi da un principio. È la lezione del controllo sulla tolleranza.
+Non tutto quello che una persona chiede di ricordare può essere trattato come un metodo da premiare o penalizzare in base a un test.
 
-Ho fermato di proposito anche una cosa. La condivisione automatica delle skill tra utenti non si porta com'è. Una skill nata dall'uso di una persona è tarata su quella persona, e non si può confrontare tra persone diverse come si confrontano i bug Python nel dominio sintetico. Quello che l'uso reale può aggiungere a questa ricerca è l'adattamento duraturo di un singolo agente nel tempo. Il trasferimento di conoscenza tra agenti diversi resta testato solo qui.
+Cambia anche la valutazione.
 
-## Il percorso di una skill nel codice
+Nel laboratorio posso assegnare lo stesso task a due configurazioni. Nell'uso reale è il sistema a scegliere quando recuperare una Skill. Le richieste che la attivano potrebbero quindi essere diverse, e più facili, di quelle che non la attivano.
 
-1. **Nasce.** `librarian/skill_generator.py` crea un `Book` con stato `DRAFT`, oppure ne scrivo uno a mano.
-2. **Viene verificata.** `librarian/optimizer.py` comprime e riverifica un Book sopra una soglia di costo, senza mai sovrascrivere l'originale. Se il controllo passa, salva una nuova versione con stato `VERIFIED`.
-3. **Viene deduplicata.** `librarian/similarity.py` confronta coppie di Book per capire se la libreria accumula duplicati con nomi diversi, e `librarian/archive_duplicates.py` archivia, senza mai cancellare, quelli superati.
-4. **Viene recuperata.** `librarian/librarian.py` instrada per sovrapposizione di tag, a costo zero e senza chiamate a embedding, e produce un `SkillPackage`.
-5. **Entra nel budget.** `librarian/context_budget.py` impone un tetto reale al contesto iniettato, basato sulla finestra del modello e su un conteggio vero dei token, mai una stima.
-6. **Entra nel prompt.** `SkillPackage.as_prompt_context()` concatena i testi delle procedure selezionate.
-7. **Viene usata.** `agents/worker.py` costruisce il prompt completo, chiama il modello ed estrae la risposta.
-8. **Viene misurata.** `experiment/events.py` registra ogni fase in JSONL, e i moduli di economia, riepilogo, tabella dell'osservatore e mappa della conoscenza trasformano quei log in report leggibili, senza costi perché leggono solo file locali.
+Per ridurre questo problema serve un confronto appaiato e, quando possibile, alla cieca.
 
-Un `Book` è una procedura. Questi sono i suoi campi principali.
+In un controllo preliminare con un modello Gemma locale, su 22 coppie confrontabili, il meccanismo di recupero del comportamento ha ottenuto 17 successi contro 13 del prompt senza supporto.
 
-| Campo | Significato |
+Quasi tutto il vantaggio era concentrato in un solo dominio, l'onestà sui materiali. Negli altri domini i risultati erano molto più simili.
+
+Un solo run per condizione non permette conclusioni definitive, e questo controllo sta fuori dai dati di riferimento del laboratorio.
+
+Il passaggio all'uso reale mi ha insegnato soprattutto che **una procedura nata per una persona non diventa automaticamente una buona procedura per tutte le altre**.
+
+## Come funziona la memoria procedurale nel codice?
+
+L'unità della libreria si chiama `Book`.
+
+Un Book contiene una procedura, la sua identità, i tag di recupero, lo stato di verifica e le informazioni sulle versioni precedenti.
+
+Il suo percorso è questo:
+
+1. **Nasce.** `librarian/skill_generator.py` crea una procedura in stato `DRAFT`, oppure viene scritta manualmente.
+2. **Viene verificata.** `librarian/optimizer.py` può comprimerla e riverificarla senza sovrascrivere l'originale. Una versione che supera i controlli diventa `VERIFIED`.
+3. **Viene confrontata.** `librarian/similarity.py` cerca possibili duplicati; `archive_duplicates.py` archivia le versioni superate senza cancellarle.
+4. **Viene recuperata.** `librarian/librarian.py` usa la sovrapposizione dei tag e restituisce uno `SkillPackage`, senza chiamate a embedding.
+5. **Entra nel budget.** `librarian/context_budget.py` controlla quanti token possono essere inseriti nel contesto.
+6. **Entra nel prompt.** `SkillPackage.as_prompt_context()` assembla le procedure selezionate.
+7. **Viene usata.** `agents/worker.py` costruisce il prompt e interroga il modello.
+8. **Viene misurata.** `experiment/events.py` registra i passaggi in JSONL, da cui vengono generati i report.
+
+L'intero processo è tracciabile, anche quando il risultato è negativo.
+
+### Dove si trova cosa?
+
+| Directory | Ruolo |
 |---|---|
-| `id`, `version`, `title`, `domain` | identità, versione e area |
-| `problem_tags`, `capability_tags`, `resource_tags` | etichette che il Librarian usa per il confronto per sovrapposizione |
-| `procedure_text` | il testo che entra davvero nel prompt |
-| `pattern_id` | il pattern di bug a cui la procedura risponde |
-| `status` | `DRAFT` se appena generata, `VERIFIED` dopo la riverifica dell'ottimizzatore |
-| `confidence`, `verification_count` | fiducia numerica, e quante volte e come è stata riverificata |
-| `derived_from`, `supersedes`, `superseded_by` | genealogia: da cosa è stata compressa e la catena delle versioni |
-| `duplicate_of` | un altro Book giudicato duplicato dal controllo di similarità |
-| `generation_method` | `manual`, `compression` o `skill_generator` |
+| `domain/` | Bug, famiglie di task e verificatori |
+| `agents/` | Prompt e chiamate ai modelli |
+| `librarian/` | Recupero, gestione, confronto e ottimizzazione delle procedure |
+| `library/books/` | Libreria delle Skills |
+| `cheater/` | Solution Bank della configurazione C |
+| `experiment/` | Esecuzione dei confronti e registrazione dei risultati |
+| `verification/` | Controlli causali, holdout e verifiche, con gli script in `benchmarks/`, `runners/` e `validation/` |
+| `tests/` | Test automatici del laboratorio |
+| `city/` | Visualizzazione delle Quest in Cognitive City |
+| `adapters/` | Collegamento ai provider e simulatori |
 
-## Come è organizzato il repository
+## Come provarlo
 
-- `domain/` contiene i compiti, le famiglie di bug e i controlli deterministici.
-- `agents/` costruisce il prompt e fa girare il risolutore.
-- `librarian/` recupera, dosa, confronta e ottimizza con cautela le procedure.
-- `cheater/` è la banca delle soluzioni usata dalla config C.
-- `experiment/` esegue le configurazioni affiancate, salva i punti di ripresa e scrive le prove.
-- `verification/` contiene le sonde causali, gli holdout, la logica di recupero e i controlli di coerenza, con gli script eseguibili in `benchmarks/`, `runners/` e `validation/`.
-- `tests/` contiene i test automatici, organizzati come il pacchetto (`experiment`, `librarian`, `verification`). Si lanciano dalla cartella superiore con `python -m pytest cognitive_rpg`.
-- `city/` trasforma un run concluso nella pagina di Cognitive City mostrata sopra.
-- `adapters/` collega i provider dei modelli, con adattatori simulati per lo sviluppo.
-- `library/books/` è la libreria delle procedure.
+Serve Python 3.11 o superiore.
 
-## Avvio
+Clona il repository in una directory chiamata `cognitive_rpg`, poi esegui i comandi dalla cartella che la contiene.
 
-Serve Python 3.11 o superiore. Clona il repository in una cartella chiamata `cognitive_rpg` e lancia i comandi dalla cartella che la contiene, così il pacchetto si può importare. La configurazione scrive il tuo `.env` in quella cartella superiore, fuori dal repository.
-
-```sh
+```bash
 python -m pip install -r cognitive_rpg/requirements.txt
 python -m cognitive_rpg.settings_wizard
 python -m cognitive_rpg.experiment.experiment_0
 ```
 
-Per sviluppare ci sono adattatori simulati che non richiedono chiamate a pagamento. Le esecuzioni reali richiedono le chiavi dei provider, che la configurazione chiede e non salva mai nel repository.
+Gli adapter simulati permettono di sviluppare senza chiamate a pagamento. Le esecuzioni con modelli reali richiedono le chiavi dei rispettivi provider.
 
-## I termini in un posto solo
+I test del pacchetto possono essere lanciati dalla directory superiore con:
 
-| Termine | Significato |
-|---|---|
-| Quest | un bug da risolvere, controllato automaticamente con `pytest` |
-| Book | una procedura scritta, l'unità base della libreria di skill |
-| Librarian | il componente che instrada le skill pertinenti, per sovrapposizione di tag, a costo zero |
-| Optimizer | comprime e riverifica una skill senza mai sovrascrivere l'originale |
-| KNOWN, VARIANT, NOVEL | esempio canonico, stesso pattern con un altro problema, pattern mai coperto (il controllo) |
-| Coverage | quanto ha trovato il recupero: `NONE`, `PARTIAL` o `FULL` |
-| DRAFT, VERIFIED | ciclo di vita di una skill: appena generata, poi riverificata prima di fidarsene |
+```bash
+python -m pytest cognitive_rpg
+```
 
-## Stato
+## Cosa posso concludere?
 
-Il lavoro è in corso e non è un articolo sottoposto a revisione. I risultati sono prove da caso di studio, con i loro limiti scritti accanto. I risultati di riferimento vengono da una sola run pulita, `experiment4`, con `experiment_totale_2026_09_18` come secondo riferimento. Tutto il resto è tenuto come log.
+Non che le Skills siano sempre utili.
+
+Non che un modello piccolo, con una buona libreria, possa sostituire in generale un modello più potente.
+
+E nemmeno che una procedura sia necessariamente migliore di un esempio precedente.
+
+I risultati permettono una conclusione più circoscritta.
+
+**La conoscenza esterna può modificare concretamente il comportamento di un modello. Ma il suo beneficio dipende dal compito, da ciò che il modello sa già fare, da cosa contiene la procedura e da quando viene recuperata.**
+
+In alcuni casi la procedura aiuta. In altri l'esempio ottiene lo stesso risultato. In molti non serve nulla. E in una prova esplorativa una regola aggiuntiva ha fatto peggiorare sensibilmente le prestazioni.
+
+Il controllo causale sulla tolleranza mostra anche che una procedura può indirizzare il modello verso la copia di un valore oppure verso una derivazione dipendente dal problema.
+
+Questi sono risultati osservati nel contesto del laboratorio. Non dimostrano automaticamente come debbano essere organizzati i file di istruzioni di un agente, le sue Skills o i sistemi di Context Engineering più complessi.
+
+Forniscono però un metodo per studiarli: confronti appaiati, controlli negativi, modifiche causali, casi non visti e verificatori sottoposti a loro volta a verifica.
+
+## Le domande che rimangono
+
+C'è una domanda che trovo persino più interessante di quella da cui sono partito:
+
+**Come possiamo sapere che un modello ha bisogno di una procedura prima di fornirgliela?**
+
+Se il recupero avviene soltanto per somiglianza, troviamo conoscenza pertinente. Ma non necessariamente conoscenza utile.
+
+E se una procedura risolve un problema, come distinguiamo un metodo trasferibile da una scorciatoia che funziona soltanto sui casi già osservati?
+
+Quanto del vantaggio dipende dal contenuto? Quanto dalla diagnosi? Quanto dalla selezione? Quanto dalla capacità del modello?
+
+Infine: una memoria procedurale deve cercare di ricordare tutto quello che ha funzionato, oppure imparare anche quando è meglio non intervenire?
+
+Non ho ancora risposte generali a queste domande.
+
+Il laboratorio, però, ha già mostrato perché vale la pena porsele.
+
+## Stato della ricerca e limiti
+
+Procedural Memory Lab è un progetto di ricerca indipendente ancora in corso, non un articolo sottoposto a peer review.
+
+La run principale comprende 39 task sintetici di correzione Python, con un tentativo per configurazione e una sola famiglia di modelli. Le verifiche complementari utilizzano talvolta campioni ancora più piccoli.
+
+Le run numerate precedenti sono archiviate come log e non entrano in nessun risultato. Alcune valutazioni sono state utilizzate durante lo sviluppo delle procedure. Le prove in Aria appartengono a un contesto differente e non vanno aggregate con quelle del laboratorio.
+
+Nessun log grezzo è presente nel repository pubblico. I numeri qui riportati derivano dagli artefatti locali della ricerca, ricalcolati da `log.jsonl`; non sono quindi riproducibili indipendentemente dalla sola versione pubblica.
+
+Preferisco dichiarare questi limiti accanto ai risultati piuttosto che lasciare numeri apparentemente precisi senza spiegare da dove vengono.
 
 ## Licenza
 
-Copyright © 2026 Ferdinando Gregorio Fernandez. Tutti i diritti riservati. Il codice è visibile per valutazione di portfolio e di ricerca. Riuso, ridistribuzione e opere derivate non sono consentiti. Vedi [LICENSE](LICENSE).
+Copyright © 2026 Ferdinando Gregorio Fernandez.
+
+Tutti i diritti riservati. Il codice è visibile per valutazione di portfolio e di ricerca. Riuso, ridistribuzione e opere derivate non sono consentiti. Vedi [LICENSE](LICENSE).
