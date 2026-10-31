@@ -188,7 +188,7 @@ _KNOWN_BENCHMARK_DEFECTS = {
         "'variable shadowing' on this task will not pass it, and a systematic "
         "recovery failure here reflects this task-authoring confound, not "
         "necessarily a real capability gap on shadowing. Found investigating a "
-        "7/7 deterministic failure in verification/benchmark_self_consistency.py's "
+        "7/7 deterministic failure in verification/benchmarks/benchmark_self_consistency.py's "
         "k=3/5/7 sweep (TODO.md point 17)."
     ),
 }

@@ -280,7 +280,7 @@ def majority_vote(keys: list[str]) -> str | None:
     when the caller needs to know 'did the samples actually agree'.
 
     Written to remove a real duplication: probe_generator.
-    evaluate_suite_stability and verification.benchmark_self_consistency
+    evaluate_suite_stability and verification.benchmarks.benchmark_self_consistency
     both needed this exact tie rule (return the modal key, or None when the
     top spot is tied) for two different repeated-LLM-output voting
     problems -- the judge's verdict across judge_reps, and the Worker's

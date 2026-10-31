@@ -401,7 +401,7 @@ def evaluate_suite_stability(
     silently pick a winner in that case would hide exactly the instability
     this function exists to surface. Uses stabilizer.majority_vote instead
     (2026-09-21), which does surface that kind of tie as None -- shared with
-    verification.benchmark_self_consistency's own vote over Worker
+    verification.benchmarks.benchmark_self_consistency's own vote over Worker
     candidates instead of two copies of the same tie rule.
 
     adaptive (2026-09-21, TODO.md point 20, application #2 of the atom/
