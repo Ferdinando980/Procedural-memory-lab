@@ -14,11 +14,15 @@ protection. Whatever you paste is echoed back to you before it's saved so you
 can catch a bad paste before it's written to .env.
 """
 
+from pathlib import Path
+
 from . import config
 from .env_file import read_env_file, update_env_file
 from .providers import PROVIDER_ORDER, PROVIDERS
 
-TEMPLATE_PATH = config.ROOT_DIR / ".env.example"
+# The template ships with the package (next to this file); the .env it creates
+# goes one folder up (config.ENV_PATH), outside the repository.
+TEMPLATE_PATH = Path(__file__).resolve().parent / ".env.example"
 
 
 def _print_provider_menu():

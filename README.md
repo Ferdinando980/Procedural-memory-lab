@@ -69,27 +69,32 @@ The test lives in `experiment/canary.py`. It uses synthetic tasks that neither t
 
 <p align="center"><img src="docs/images/epsilon-lab.png" width="760" alt="The tolerance check, page view"></p>
 
-## What the five complete runs show
+## What the reference run shows
 
-| Run | n | A (Expert) | B (Small) | F (Skill Library) | C (Solution Bank) | F vs B |
-|---|---|---|---|---|---|---|
-| 1 | 26 | 100.0% | 88.5% | 96.2% | 92.3% | +7.7 |
-| 2 | 21 | 95.2% | 95.2% | 100.0% | not run | +4.8 |
-| 3 | 26 | 96.2% | 84.6% | 96.2% | 96.2% | +11.5 |
-| 4 | 4 | 50.0% | 50.0% | 75.0% | 50.0% | +25.0 |
-| 5 | 39 | 97.4% | 92.3% | 97.4% | 97.4% | +5.1 |
+All results below come from one clean run, `experiment4`: 39 tasks, four configs, 156 attempts, a single provider and a single model per config (Expert `gemini-3.7-flash`, Small `gemini-3.1-flash-lite`), run in one sitting. I no longer use the earlier runs for any result. They switched provider or model halfway through, used a different Expert, or had only four tasks. They are archived as logs.
 
-F beat B in all five complete runs, never tied and never lost: 7.8 percentage points over 116 attempts in total. Run 4 has four tasks only, so its +25 is mostly noise. The very first run I ever did on this project, smaller and older than any above, showed no benefit. It stayed for a while as the only written conclusion even after the later runs had contradicted it, not because I hid it but because nobody had checked again. I did not erase it from the history. It is just no longer the right conclusion.
+| Config | Solved | Accuracy | 95% interval |
+|---|---|---|---|
+| A, Expert | 38 / 39 | 97.4% | 86.8 to 99.5 |
+| B, Small | 36 / 39 | 92.3% | 79.7 to 97.3 |
+| F, Small + Skill Library | 38 / 39 | 97.4% | 86.8 to 99.5 |
+| C, Small + Solution Bank | 38 / 39 | 97.4% | 86.8 to 99.5 |
 
-Two real limits, not buried under the table.
+| Split (tasks) | A | B | F | C |
+|---|---|---|---|---|
+| KNOWN (10) | 9 | 8 | 10 | 10 |
+| VARIANT (21) | 21 | 20 | 20 | 20 |
+| NOVEL (8) | 8 | 8 | 8 | 8 |
 
-**These are not clean independent replications.** The runs share most of the same task catalogue, and between runs the optimiser compressed and re-verified the existing skills. Part of F's advantage may reflect a library that sharpens itself on these specific tasks and not generalisation to tasks it never saw.
+**Reading the paired differences.** F beat B on three tasks and lost on one. The wins are two `wrong_string_case_comparison` tasks and one `floating_point_equality` task, all with the skill matched exactly. The loss is `floating_point_equality__temperature_reached__variant`, a task whose test suite I know is flawed: it never checks the case it is meant to test, so B "passes" without writing an epsilon at all. Leaving that task out, F solves 38 of 38 against 35 of 38 for B, three wins to none, and an exact McNemar test gives p = 0.25. That is a direction, not a significant effect. F and C solved exactly the same tasks, so this run cannot tell a reusable procedure from a similar solved example, and Expert is already near the ceiling, which leaves little room to show anything.
 
-**The gain is not uniform, mechanism by mechanism.** In the most complete run (the last one, n=39) the Delta Retrieval of F is negative, minus 3.2 points, while the one of C is zero and never negative. The retrieval mechanism does not help in the same way in every config, even when the final accuracy is identical.
+**Where the benefit sits.** A skill was injected in 31 of the 39 F attempts. In 27 of them (87.1% by the project's own count, 28 if the flawed task is counted) B solved the task anyway, so those injections cost tokens and changed nothing. Three were real saves. The Delta Retrieval of F is minus 3.2 points, and exactly zero once the flawed task is left out. That of C is zero. Only two of the ten covered patterns, `floating_point_equality` and `wrong_string_case_comparison`, show a measured benefit in this run.
 
-On cost, F pays on average between 116 and 343 extra input tokens compared with B to use a skill that is already built. That is the retrieval overhead, and it changes from run to run depending on which skills are retrieved. Building a new skill, which means the optimiser compressing and re-verifying it, costs around 1000 to 2000 tokens once per pattern. Each run report computes a breakeven per pattern, meaning after how many uses the building cost pays back compared with always calling Expert. It also sorts patterns three ways: `ECONOMICALLY_POSITIVE` when it pays in tokens, `ACCURACY_POSITIVE` when it does not pay in tokens but solved something A or B did not, and `NEGATIVE` otherwise. Negative does not mean throw the skill away, since with numbers this small it can have value the two metrics do not capture. In the most complete run, of 10 covered patterns one is economically positive and one is accuracy positive. The other eight are negative. That is an uncomfortable figure and it is more honest to show it than to hide it.
+**Cost.** The run is sequential, so tokens and latency are comparable. F pays on average 145 more input tokens than B (from 0 to 480) to use a ready skill. Per task: A 593 tokens, mostly hidden reasoning, B 221, C 308, F 370. Mean latency: A 13.8 s, B 0.93 s, C 0.88 s, F 0.96 s. I do not report money, because the price variables were not set in this run and every cost reads zero. Building skills is a separate cost. The run's event log records 18 compressions and 66 re-verifications, 35,269 tokens, about 1,959 per skill. The per-pattern construction costs in the economics report, up to about 37,000 tokens, accumulate what the shared library cost across all earlier runs. With two to four tasks per pattern, one pattern out of ten is economically positive (breakeven near 13 uses), one is positive on accuracy only, and eight are negative. Negative does not mean throw the skill away, since with numbers this small it can carry value those two metrics miss.
 
-The raw run logs are not part of this public repository, so these numbers are my own reading of them.
+**A second reference.** `experiment_totale_2026_09_18` runs the same 39 tasks with the same Small model, but with a different Expert (`gemini-3.6-flash`), in parallel, and with a retrieval policy that skips the eight patterns where a skill had shown no benefit in earlier runs. Only 6 F attempts receive a skill instead of 31, with a median of 149 input tokens against 257, yet B, C and F solve exactly the same tasks as in `experiment4`, including F's three wins, which all sit inside the six tasks that still get a skill. It is not an independent replication, because decoding is nearly deterministic: B's output length is identical on 38 of 39 tasks. What it shows is that the 25 dropped injections had no effect on the outcomes. I use it for B, C and F, not for Expert and not for latency.
+
+**What this cannot say.** The tasks are 39 single-function Python bugs written for this project, one run per cell, on one family of models. It does not separate a procedure from a similar solved example, it does not show that the benefit survives with another Small model or another domain, and the difference between F and B is three tasks. The raw run logs are not part of this public repository, so these numbers are my own reading of `experiment4`, recomputed from its `log.jsonl`.
 
 ## From a controlled experiment to real use
 
@@ -106,7 +111,7 @@ Real use also changes how you measure. In the experiment I can force half of the
 What came out of it so far, with its caveats.
 
 - The causal check described above was reused on eight self-checking mechanisms that verify the model's output independently of what the model says about it. Each one was validated on a known case plus a direct manipulation before it went into use. They all remain candidates: verified once, but not yet watched for long enough in real use.
-- On a local Gemma model I compared a behaviour retrieval mechanism against the bare prompt on 22 comparable pairs, judged by the same validators used in production. The result was 17 of 22 (77%) against 13 of 22 (59%). Almost all of the advantage sits in one domain, honesty about the materials (6 of 9 against 2 of 9). On task decomposition and beginner explanations the two approaches are about even. It is one run per cell with no repetitions, so the direction agrees with this project but the exact number is not conclusive.
+- Preliminary, outside the reference runs: on a local Gemma model I compared a behaviour retrieval mechanism against the bare prompt on 22 comparable pairs, judged by the same validators used in production. The result was 17 of 22 (77%) against 13 of 22 (59%). Almost all of the advantage sits in one domain, honesty about the materials (6 of 9 against 2 of 9). On task decomposition and beginner explanations the two approaches are about even. It is one run per cell with no repetitions, so the direction agrees with this project but the exact number is not conclusive.
 - A finding from here became a product rule. When writing a skill, name the awkward cases explicitly instead of trusting the model to generalise from a principle. That is the lesson of the tolerance check.
 
 I also stopped one thing on purpose. Automatic sharing of skills between users does not carry over as it stands. A skill born from one person's use is tuned to that person, and it cannot be compared across people the way Python bugs can be compared in the synthetic domain. What real use can add to this research is lasting adaptation of a single agent over time. Knowledge transfer between agents is still tested only here.
@@ -143,17 +148,18 @@ A `Book` is a procedure. These are its main fields.
 - `librarian/` retrieves, budgets, compares and carefully optimises procedures.
 - `cheater/` is the solution bank used by config C.
 - `experiment/` runs the matched configurations, checkpoints the work and writes the evidence.
-- `verification/` holds the causal probes, the holdouts, the recovery tests and the consistency checks.
+- `verification/` holds the causal probes, the holdouts, the recovery logic and the consistency checks, with its runnable scripts in `benchmarks/`, `runners/` and `validation/`.
+- `tests/` holds the automated tests, laid out like the package (`experiment`, `librarian`, `verification`). Run them from the parent folder with `python -m pytest cognitive_rpg`.
 - `city/` turns a finished run into the Cognitive City page shown above.
 - `adapters/` connects the model providers, with mock adapters for development.
 - `library/books/` is the library of procedures.
 
 ## Run it
 
-You need Python 3.11 or newer. Install the dependencies from the parent workspace and run the commands from the folder that contains `cognitive_rpg`, so the package can be imported.
+You need Python 3.11 or newer. Clone the repository into a folder named `cognitive_rpg`, then run the commands from its parent folder, so the package can be imported. The settings wizard writes your `.env` in that parent folder, outside the repository.
 
 ```sh
-python -m pip install -r requirements.txt
+python -m pip install -r cognitive_rpg/requirements.txt
 python -m cognitive_rpg.settings_wizard
 python -m cognitive_rpg.experiment.experiment_0
 ```
@@ -174,7 +180,7 @@ For development there are mock adapters that need no paid calls. Real runs need 
 
 ## Status
 
-Ongoing, and not a peer reviewed paper. The results are case study evidence with their limits written next to them.
+Ongoing, and not a peer reviewed paper. The results are case study evidence with their limits written next to them. The reference results come from one clean run, `experiment4`, with `experiment_totale_2026_09_18` as a second reference. Everything else is kept as logs.
 
 ## License
 

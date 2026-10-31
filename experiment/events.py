@@ -133,9 +133,21 @@ def read_events_all_experiments() -> list[dict]:
     in an earlier experiment and merely reused (not recompressed) in a later
     one reads as free in that later one's report (found 2026-08-18: experiment2's
     knowledge_map showed build_cost=0 for patterns experiment0 had already paid
-    to compress)."""
+    to compress).
+
+    Runs moved to logs/archivio/ (not clean enough to report results from) are
+    read too: their Optimizer events are still real construction cost of the
+    shared library. Every caller passes this only as build_cost_events, so
+    archived runs contribute cost and never results."""
     events = []
     for d in sorted(config.LOG_DIR.iterdir()):
         if d.is_dir() and _EXPERIMENT_ID_RE.match(d.name):
             events.extend(read_events(d.name))
+    archive = config.LOG_DIR / "archivio"
+    if archive.is_dir():
+        for d in sorted(archive.iterdir()):
+            path = d / "events.jsonl"
+            if d.is_dir() and _EXPERIMENT_ID_RE.match(d.name) and path.exists():
+                with open(path, encoding="utf-8") as f:
+                    events.extend(json.loads(line) for line in f if line.strip())
     return events

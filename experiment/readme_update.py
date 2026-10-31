@@ -31,13 +31,13 @@ MARKER_END = "<!-- AUTO:RISULTATI:END -->"
 
 README_PATH = Path(__file__).resolve().parent.parent / "README.md"
 
-# THESIS.md (top-level, sibling of cognitive_rpg/) mirrors the
+# THESIS.md (Ricerca/docs/, outside cognitive_rpg/) mirrors the
 # same results table under its own markers -- added 2026-09-16 so the
 # research narrative document never drifts from the numbers in
 # README.md the way README.md itself used to drift before this script
 # existed. Same body, different markers, so the two files can each keep
 # their own surrounding prose untouched.
-THESIS_PATH = Path(__file__).resolve().parent.parent.parent / "THESIS.md"
+THESIS_PATH = Path(__file__).resolve().parent.parent.parent / "docs" / "THESIS.md"
 THESIS_MARKER_START = "<!-- AUTO:THESIS-RISULTATI:START -->"
 THESIS_MARKER_END = "<!-- AUTO:THESIS-RISULTATI:END -->"
 
@@ -211,10 +211,11 @@ def _substitute(path: Path, marker_start: str, marker_end: str, section: str, la
     """Returns True if `path` changed."""
     text = path.read_text(encoding="utf-8")
     if marker_start not in text or marker_end not in text:
-        raise RuntimeError(
-            f"{label} is missing {marker_start}/{marker_end} markers -- "
-            "add them around the results section once, by hand, before this can auto-update it."
+        print(
+            f"[readme_update] {label}: marcatori {marker_start}/{marker_end} assenti, "
+            "sezione risultati curata a mano -- nessun aggiornamento automatico."
         )
+        return False
     pattern = re.compile(re.escape(marker_start) + r".*?" + re.escape(marker_end), re.DOTALL)
     new_text = pattern.sub(lambda _m: section, text, count=1)
     changed = new_text != text
@@ -245,8 +246,8 @@ def update_thesis() -> bool:
 def main() -> int:
     readme_changed = update_readme()
     thesis_changed = update_thesis()
-    print(f"[readme_update] README.md {'aggiornato' if readme_changed else 'già allineato ai log'}.")
-    print(f"[readme_update] THESIS.md {'aggiornato' if thesis_changed else 'già allineato ai log (o assente)'}.")
+    print(f"[readme_update] README.md {'aggiornato' if readme_changed else 'invariato'}.")
+    print(f"[readme_update] THESIS.md {'aggiornato' if thesis_changed else 'invariato'}.")
     return 0
 
 

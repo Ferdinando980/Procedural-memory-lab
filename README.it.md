@@ -69,27 +69,32 @@ Il test sta in `experiment/canary.py`. Usa compiti sintetici che né l'ottimizza
 
 <p align="center"><img src="docs/images/epsilon-lab.png" width="760" alt="Il controllo sulla tolleranza, vista della pagina"></p>
 
-## Cosa mostrano i cinque run completi
+## Cosa mostra la run di riferimento
 
-| Run | n | A (Expert) | B (Small) | F (Skill Library) | C (Solution Bank) | F contro B |
-|---|---|---|---|---|---|---|
-| 1 | 26 | 100,0% | 88,5% | 96,2% | 92,3% | +7,7 |
-| 2 | 21 | 95,2% | 95,2% | 100,0% | non eseguita | +4,8 |
-| 3 | 26 | 96,2% | 84,6% | 96,2% | 96,2% | +11,5 |
-| 4 | 4 | 50,0% | 50,0% | 75,0% | 50,0% | +25,0 |
-| 5 | 39 | 97,4% | 92,3% | 97,4% | 97,4% | +5,1 |
+Tutti i risultati qui sotto vengono da una sola run pulita, `experiment4`: 39 compiti, quattro config, 156 tentativi, un solo provider e un solo modello per config (Expert `gemini-3.7-flash`, Small `gemini-3.1-flash-lite`), eseguita in un'unica sessione. Le run precedenti non le uso più per nessun risultato. A metà cambiavano provider o modello, usavano un Expert diverso o avevano solo quattro compiti. Sono archiviate come log.
 
-F ha battuto B in tutti e cinque i run completi, mai alla pari e mai peggio: 7,8 punti percentuali su 116 tentativi in totale. Il run 4 ha solo quattro compiti, quindi il suo +25 è per lo più rumore. Il primissimo run fatto su questo progetto, più piccolo e più vecchio di tutti questi, non mostrava alcun beneficio. È rimasto per un po' come unica conclusione scritta anche dopo che i run successivi lo avevano smentito, non perché lo nascondessi ma perché nessuno l'aveva ricontrollata. Non l'ho cancellato dalla storia. Semplicemente non è più la conclusione giusta.
+| Config | Risolti | Accuratezza | Intervallo al 95% |
+|---|---|---|---|
+| A, Expert | 38 / 39 | 97,4% | da 86,8 a 99,5 |
+| B, Small | 36 / 39 | 92,3% | da 79,7 a 97,3 |
+| F, Small + Skill Library | 38 / 39 | 97,4% | da 86,8 a 99,5 |
+| C, Small + Solution Bank | 38 / 39 | 97,4% | da 86,8 a 99,5 |
 
-Due limiti veri, non nascosti sotto la tabella.
+| Split (compiti) | A | B | F | C |
+|---|---|---|---|---|
+| KNOWN (10) | 9 | 8 | 10 | 10 |
+| VARIANT (21) | 21 | 20 | 20 | 20 |
+| NOVEL (8) | 8 | 8 | 8 | 8 |
 
-**Non sono repliche indipendenti pulite.** I run condividono in gran parte lo stesso catalogo di compiti e, tra un run e l'altro, l'ottimizzatore ha compresso e riverificato le skill esistenti. Parte del vantaggio di F potrebbe riflettere una libreria che si affina su questi compiti specifici e non una generalizzazione a compiti mai visti.
+**Lettura delle differenze appaiate.** F ha battuto B su tre compiti e ha perso su uno. Le vittorie sono due compiti `wrong_string_case_comparison` e uno `floating_point_equality`, tutti con la skill trovata in modo esatto. La sconfitta è `floating_point_equality__temperature_reached__variant`, un compito la cui suite di test so essere difettosa: non verifica mai il caso che dovrebbe testare, quindi B "passa" senza scrivere alcun epsilon. Escludendo quel compito, F ne risolve 38 su 38 contro 35 su 38 di B, tre vittorie a zero, e un test di McNemar esatto dà p = 0,25. È una direzione, non un effetto significativo. F e C hanno risolto esattamente gli stessi compiti, quindi questa run non permette di distinguere una procedura riusabile da una soluzione simile già pronta, ed Expert è già vicino al massimo, il che lascia poco spazio per mostrare qualcosa.
 
-**Il guadagno non è uniforme, meccanismo per meccanismo.** Nel run più completo (l'ultimo, n=39) il Delta Retrieval di F è negativo, meno 3,2 punti, mentre quello di C è a zero e mai negativo. Il meccanismo di recupero non aiuta nello stesso modo in ogni config, anche quando l'accuratezza finale coincide.
+**Dove sta il beneficio.** Una skill è stata iniettata in 31 dei 39 tentativi di F. In 27 di questi (87,1% secondo il conteggio del progetto, 28 se si conta il compito difettoso) B risolveva comunque il compito, quindi quelle iniezioni sono costate token senza cambiare nulla. Tre sono stati vantaggi reali. Il Delta Retrieval di F è meno 3,2 punti, ed è esattamente zero escludendo il compito difettoso. Quello di C è zero. Solo due dei dieci pattern coperti, `floating_point_equality` e `wrong_string_case_comparison`, mostrano un beneficio misurato in questa run.
 
-Sul costo, F paga in media tra 116 e 343 token di input in più rispetto a B per usare una skill già pronta. È il costo del recupero, e cambia da un run all'altro a seconda di quali skill vengono recuperate. Costruire una skill nuova, cioè l'ottimizzatore che la comprime e la riverifica, costa circa 1000-2000 token una tantum per pattern. Ogni report di run calcola un breakeven per pattern, cioè dopo quanti usi il costo di costruzione si ripaga rispetto a chiamare sempre Expert. Classifica inoltre i pattern in tre modi: `ECONOMICALLY_POSITIVE` se conviene sui token, `ACCURACY_POSITIVE` se non conviene sui token ma ha risolto qualcosa che A o B non risolvevano, `NEGATIVE` negli altri casi. Negativo non significa buttare la skill, perché con numeri così piccoli può avere un valore che le due metriche non catturano. Nel run più completo, su 10 pattern coperti uno è economicamente positivo e uno è positivo sull'accuratezza. Gli altri otto sono negativi. È un dato scomodo, ed è più onesto mostrarlo che nasconderlo.
+**Costo.** La run è sequenziale, quindi token e latenza sono confrontabili. F paga in media 145 token di input in più di B (da 0 a 480) per usare una skill già pronta. Per compito: A 593 token, in gran parte ragionamento nascosto, B 221, C 308, F 370. Latenza media: A 13,8 s, B 0,93 s, C 0,88 s, F 0,96 s. Non riporto denaro, perché in questa run le variabili di prezzo non erano impostate e ogni costo risulta zero. Costruire le skill è un costo a parte. Il registro eventi della run segna 18 compressioni e 66 riverifiche, 35.269 token, circa 1.959 per skill. I costi di costruzione per pattern nel report economico, fino a circa 37.000 token, accumulano quanto la libreria condivisa è costata in tutte le run precedenti. Con da due a quattro compiti per pattern, un pattern su dieci è economicamente positivo (pareggio intorno a 13 usi), uno è positivo solo sull'accuratezza e otto sono negativi. Negativo non significa buttare la skill, perché con numeri così piccoli può avere un valore che le due metriche non catturano.
 
-I log completi dei run non fanno parte di questo repository pubblico, quindi questi numeri sono una mia lettura di quei log.
+**Un secondo riferimento.** `experiment_totale_2026_09_18` fa girare gli stessi 39 compiti con lo stesso modello Small, ma con un Expert diverso (`gemini-3.6-flash`), in parallelo e con una politica di recupero che salta gli otto pattern in cui una skill non aveva mostrato benefici nelle run precedenti. Solo 6 tentativi di F ricevono una skill invece di 31, con una mediana di 149 token di input contro 257, eppure B, C e F risolvono esattamente gli stessi compiti di `experiment4`, comprese le tre vittorie di F, che stanno tutte nei sei compiti che ricevono ancora una skill. Non è una replica indipendente, perché la decodifica è quasi deterministica: la lunghezza dell'output di B è identica su 38 compiti su 39. Mostra invece che le 25 iniezioni eliminate non hanno avuto effetto sugli esiti. Lo uso per B, C e F, non per Expert e non per la latenza.
+
+**Cosa non si può dire.** I compiti sono 39 bug Python di una sola funzione scritti per questo progetto, una sola esecuzione per cella, su una sola famiglia di modelli. Non separa una procedura da una soluzione simile già pronta, non mostra che il beneficio regga con un altro modello Small o in un altro dominio, e la differenza tra F e B è di tre compiti. I log completi delle run non fanno parte di questo repository pubblico, quindi questi numeri sono una mia lettura di `experiment4`, ricalcolata dal suo `log.jsonl`.
 
 ## Dall'esperimento controllato all'uso reale
 
@@ -106,7 +111,7 @@ L'uso reale cambia anche il modo di misurare. Nell'esperimento posso forzare met
 Cosa è emerso finora, con i suoi limiti.
 
 - Il controllo causale descritto sopra è stato riusato su otto meccanismi di autoverifica che controllano l'output del modello indipendentemente da ciò che il modello ne dice. Ognuno è stato validato su un caso noto più una manipolazione diretta prima di entrare in uso. Restano tutti candidati: verificati una volta, ma non ancora osservati abbastanza a lungo nell'uso reale.
-- Su un modello Gemma locale ho confrontato un meccanismo di recupero del comportamento con il solo prompt nudo su 22 coppie confrontabili, giudicate dagli stessi validator usati in produzione. Il risultato è stato 17 su 22 (77%) contro 13 su 22 (59%). Quasi tutto il vantaggio sta in un dominio, l'onestà sui materiali (6 su 9 contro 2 su 9). Sulla scomposizione dei compiti e sulle spiegazioni per principianti i due approcci sono più o meno pari. È un solo run per cella, senza ripetizioni, quindi la direzione è coerente con questo progetto ma il numero esatto non è conclusivo.
+- Preliminare e fuori dalle run di riferimento: su un modello Gemma locale ho confrontato un meccanismo di recupero del comportamento con il solo prompt nudo su 22 coppie confrontabili, giudicate dagli stessi validator usati in produzione. Il risultato è stato 17 su 22 (77%) contro 13 su 22 (59%). Quasi tutto il vantaggio sta in un dominio, l'onestà sui materiali (6 su 9 contro 2 su 9). Sulla scomposizione dei compiti e sulle spiegazioni per principianti i due approcci sono più o meno pari. È un solo run per cella, senza ripetizioni, quindi la direzione è coerente con questo progetto ma il numero esatto non è conclusivo.
 - Un risultato di qui è diventato una regola di prodotto. Quando si scrive una skill, vanno nominati esplicitamente i casi scomodi invece di fidarsi che il modello generalizzi da un principio. È la lezione del controllo sulla tolleranza.
 
 Ho fermato di proposito anche una cosa. La condivisione automatica delle skill tra utenti non si porta com'è. Una skill nata dall'uso di una persona è tarata su quella persona, e non si può confrontare tra persone diverse come si confrontano i bug Python nel dominio sintetico. Quello che l'uso reale può aggiungere a questa ricerca è l'adattamento duraturo di un singolo agente nel tempo. Il trasferimento di conoscenza tra agenti diversi resta testato solo qui.
@@ -143,17 +148,18 @@ Un `Book` è una procedura. Questi sono i suoi campi principali.
 - `librarian/` recupera, dosa, confronta e ottimizza con cautela le procedure.
 - `cheater/` è la banca delle soluzioni usata dalla config C.
 - `experiment/` esegue le configurazioni affiancate, salva i punti di ripresa e scrive le prove.
-- `verification/` contiene le sonde causali, gli holdout, i test di recupero e i controlli di coerenza.
+- `verification/` contiene le sonde causali, gli holdout, la logica di recupero e i controlli di coerenza, con gli script eseguibili in `benchmarks/`, `runners/` e `validation/`.
+- `tests/` contiene i test automatici, organizzati come il pacchetto (`experiment`, `librarian`, `verification`). Si lanciano dalla cartella superiore con `python -m pytest cognitive_rpg`.
 - `city/` trasforma un run concluso nella pagina di Cognitive City mostrata sopra.
 - `adapters/` collega i provider dei modelli, con adattatori simulati per lo sviluppo.
 - `library/books/` è la libreria delle procedure.
 
 ## Avvio
 
-Serve Python 3.11 o superiore. Le dipendenze si installano dalla cartella di lavoro superiore e i comandi vanno lanciati dalla cartella che contiene `cognitive_rpg`, così il pacchetto si può importare.
+Serve Python 3.11 o superiore. Clona il repository in una cartella chiamata `cognitive_rpg` e lancia i comandi dalla cartella che la contiene, così il pacchetto si può importare. La configurazione scrive il tuo `.env` in quella cartella superiore, fuori dal repository.
 
 ```sh
-python -m pip install -r requirements.txt
+python -m pip install -r cognitive_rpg/requirements.txt
 python -m cognitive_rpg.settings_wizard
 python -m cognitive_rpg.experiment.experiment_0
 ```
@@ -174,7 +180,7 @@ Per sviluppare ci sono adattatori simulati che non richiedono chiamate a pagamen
 
 ## Stato
 
-Il lavoro è in corso e non è un articolo sottoposto a revisione. I risultati sono prove da caso di studio, con i loro limiti scritti accanto.
+Il lavoro è in corso e non è un articolo sottoposto a revisione. I risultati sono prove da caso di studio, con i loro limiti scritti accanto. I risultati di riferimento vengono da una sola run pulita, `experiment4`, con `experiment_totale_2026_09_18` come secondo riferimento. Tutto il resto è tenuto come log.
 
 ## Licenza
 
